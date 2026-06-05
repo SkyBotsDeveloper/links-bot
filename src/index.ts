@@ -10,8 +10,13 @@ async function main(): Promise<void> {
   const config = loadAppConfig();
   const database = await connectDatabase(config.mongodbUri);
   await ensureIndexes(database);
+  logger.info("MongoDB connected and indexes ensured.");
 
   const bot = createLinksBot(config, database);
+  const botInfo = await bot.api.getMe();
+  logger.info(
+    `Telegram bot identity verified: id=${botInfo.id}, username=@${botInfo.username ?? "unknown"}, firstName=${botInfo.first_name}`,
+  );
   let server: Server | undefined;
   let pollingStarted = false;
   let shuttingDown = false;
@@ -63,6 +68,7 @@ async function main(): Promise<void> {
       throw new Error("PUBLIC_URL is required for webhook mode.");
     }
 
+    logger.info("Mode: webhook.");
     await bot.init();
     const app = express();
     app.get("/health", (_req, res) => {
@@ -85,6 +91,7 @@ async function main(): Promise<void> {
   }
 
   await bot.api.deleteWebhook();
+  logger.info("Mode: polling for local development.");
   pollingStarted = true;
   void bot
     .start({

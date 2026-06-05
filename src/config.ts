@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import dotenv from "dotenv";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const DEFAULT_LINKS_PER_PAGE = 50;
 const DEFAULT_PORT = 3000;
