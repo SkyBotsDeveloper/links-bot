@@ -7,9 +7,10 @@ A production-ready Telegram links bot built with Node.js, TypeScript, grammY, Mo
 - Fast webhook mode for production and polling mode for local development.
 - MongoDB Atlas storage with the official `mongodb` driver.
 - In-memory rendered page cache with invalidation on add/remove.
-- Public pagination with locked incomplete pages.
-- Owner-only link add, bulk add, remove, preview, stats, and cache controls.
-- Safe Telegram API behavior with auto-retry, throttling, compact messages, and pagination edits.
+- Public pagination where each page unlocks as soon as it has at least one active link.
+- User tracking for people who interact with the bot.
+- Owner-only link add, bulk add, remove, preview, stats, cache, and broadcast controls.
+- Safe Telegram API behavior with auto-retry, throttling, compact messages, pagination edits, and slow broadcasts.
 - Heroku-ready `Procfile`, `app.json`, and one-click deploy button.
 
 ## Deploy to Heroku
@@ -25,7 +26,7 @@ A production-ready Telegram links bot built with Node.js, TypeScript, grammY, Mo
 | `OWNER_IDS` | Comma-separated numeric Telegram user IDs. |
 | `PUBLIC_URL` | Public Heroku app URL, for example `https://your-app.herokuapp.com`. |
 | `NODE_ENV` | Use `production` on Heroku. |
-| `LINKS_PER_PAGE` | Defaults to `50`. A public page unlocks only when it has exactly this many links. |
+| `LINKS_PER_PAGE` | Defaults to `50`. Pages are sliced by this size. |
 
 ## MongoDB Atlas Setup
 
@@ -97,24 +98,50 @@ npm start
 - Reply with `/addlinks` to a message containing many URLs.
 - `/removelink <page> <number>` - soft-delete one active link by page position.
 - `/removepage <page>` - soft-delete up to 50 active links from that page.
-- `/listpages` - show active, removed, unlocked, and pending counts.
-- `/preview <page>` - preview any active page, including incomplete locked pages.
-- `/stats` - show MongoDB, cache, uptime, and memory status.
+- `/listpages` - show active, removed, total page, and last-page counts.
+- `/preview <page>` - preview any active page.
+- `/stats` - show MongoDB, page, user, cache, uptime, memory, and bot mode status.
 - `/reloadcache` - clear rendered page cache.
+- `/broadcast <message>` - send a text message to all tracked, unblocked, non-bot users.
+- Reply with `/broadcast` to broadcast the replied message text or caption.
+- `/broadcaststatus` - show current or last broadcast progress for this process.
 
 Normal users who try owner commands receive `❌ Not allowed.`
 
-## Pagination Lock Rule
+## Pagination Rule
 
 `LINKS_PER_PAGE` defaults to 50.
 
-- 1 to 49 active links: no public page is unlocked.
-- 50 active links: page 1 unlocks.
-- 51 to 99 active links: page 1 unlocks and page 2 is visible but locked.
-- 100 active links: page 2 unlocks.
-- The same pattern continues forever.
+- 0 active links: `/start` shows the preparing message.
+- 1 to 50 active links: page 1 unlocks.
+- 51 active links: page 2 unlocks with 1 link.
+- 75 active links: page 2 unlocks with 25 links.
+- 100 active links: page 2 has 50 links.
+- 101 active links: page 3 unlocks with 1 link.
 
-Public users never see incomplete pages. Owners can preview incomplete pages with `/preview <page>`.
+Numbering restarts from 1 on every page, even when a later page has fewer than 50 links.
+
+## User Tracking
+
+The bot tracks users who interact with it, including `/start`, messages, and callbacks. Telegram does not provide a full list of silent users who have opened the bot but never sent anything, so `/stats` reports tracked users, meaning users who interacted with the bot.
+
+Tracked fields include Telegram user ID, name fields, username, language code, bot flag, first and last seen timestamps, start count, message count, blocked status, and last broadcast timestamp.
+
+## Broadcasts
+
+Owners can run:
+
+```text
+/broadcast Hello everyone
+```
+
+Or reply to a text/caption message with:
+
+```text
+/broadcast
+```
+
+The bot broadcasts only to tracked users where `isBlocked=false` and `isBot=false`. Broadcasts are sent gradually, not all at once. If Telegram reports that the bot was blocked, the chat is missing, or the user is deactivated, the user is marked blocked automatically.
 
 ## Rate-Limit Safety
 
@@ -122,9 +149,8 @@ The bot is designed to minimize Telegram `429` errors:
 
 - Callback queries are answered quickly.
 - Pagination uses `editMessageText` instead of sending new messages.
-- Locked page clicks show only an alert.
 - Bulk add sends one summary reply, not one reply per link.
-- There is no automatic broadcast feature.
+- Broadcast sends slowly and only reports start/final summaries to the owner.
 - API calls use grammY auto-retry and throttling.
 
 Practical Telegram limits: avoid more than 1 message per second to the same chat, avoid group spam, and keep broad sends under about 30 messages per second.

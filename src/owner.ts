@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import { getBroadcastProgress, runTextBroadcast } from "./broadcastService";
 import {
   NOT_ALLOWED_MESSAGE,
   formatAddSummary,
@@ -19,6 +20,7 @@ import {
   getPageCacheSize,
 } from "./pageService";
 import { isMongoConnected } from "./db";
+import { getBroadcastTargetCount, getUserCounts } from "./userService";
 import { cleanSingleUrl, extractUrlsFromText, stripCommandPrefix } from "./utils/urls";
 import type { BotContext } from "./bot";
 
@@ -34,6 +36,8 @@ const OWNER_COMMANDS = [
   "preview",
   "stats",
   "reloadcache",
+  "broadcast",
+  "broadcaststatus",
 ];
 
 export function registerOwnerCommands(bot: Bot<BotContext>): void {
@@ -46,6 +50,8 @@ export function registerOwnerCommands(bot: Bot<BotContext>): void {
   ownerCommand(bot, "preview", handlePreview);
   ownerCommand(bot, "stats", handleStats);
   ownerCommand(bot, "reloadcache", handleReloadCache);
+  ownerCommand(bot, "broadcast", handleBroadcast);
+  ownerCommand(bot, "broadcaststatus", handleBroadcastStatus);
 }
 
 function ownerCommand(bot: Bot<BotContext>, command: string, handler: OwnerHandler): void {
@@ -77,6 +83,9 @@ async function showHelp(ctx: BotContext): Promise<void> {
       "- /preview <page>",
       "- /stats",
       "- /reloadcache",
+      "- /broadcast <message>",
+      "- Reply to a message with /broadcast",
+      "- /broadcaststatus",
       "",
       "Examples:",
       "/addlink https://example.com/video",
@@ -86,6 +95,9 @@ async function showHelp(ctx: BotContext): Promise<void> {
       "/removelink 1 12",
       "/removepage 2",
       "/preview 3",
+      "/broadcast Hello everyone",
+      "",
+      "/broadcast sends a text message to all tracked users who have interacted with the bot and are not blocked.",
     ].join("\n"),
     { link_preview_options: { is_disabled: true } },
   );
@@ -169,8 +181,8 @@ async function handleRemoveLink(ctx: BotContext, ownerId: number): Promise<void>
       "✅ Link removed.",
       `Removed URL: ${removed.url}`,
       `Total links: ${counts.active}`,
-      `Unlocked pages: ${stats.completedPages}`,
-      `Pending next page: ${stats.pendingLinks}/${stats.linksPerPage}`,
+      `Total pages: ${stats.totalPages}`,
+      `Links on last page: ${stats.linksOnLastPage}/${stats.linksPerPage}`,
     ].join("\n"),
     { link_preview_options: { is_disabled: true } },
   );
@@ -222,7 +234,7 @@ async function handlePreview(ctx: BotContext): Promise<void> {
 }
 
 async function handleStats(ctx: BotContext): Promise<void> {
-  const counts = await getLinkCounts(ctx.db);
+  const [counts, userCounts] = await Promise.all([getLinkCounts(ctx.db), getUserCounts(ctx.db)]);
   const stats = calculatePageStats(counts.active, ctx.appConfig.linksPerPage);
 
   await ctx.reply(
@@ -230,9 +242,11 @@ async function handleStats(ctx: BotContext): Promise<void> {
       mongoConnected: isMongoConnected(),
       counts,
       stats,
+      userCounts,
       cacheEntries: getPageCacheSize(),
       uptimeSeconds: process.uptime(),
       memoryUsage: process.memoryUsage(),
+      botMode: getBotMode(ctx),
     }),
   );
 }
@@ -240,6 +254,59 @@ async function handleStats(ctx: BotContext): Promise<void> {
 async function handleReloadCache(ctx: BotContext): Promise<void> {
   clearPageCache();
   await ctx.reply("✅ Cache cleared.");
+}
+
+async function handleBroadcast(ctx: BotContext): Promise<void> {
+  const payload = getCommandPayload(ctx);
+  const replyText = getReplyText(ctx);
+  const message = (payload || replyText).trim();
+
+  if (!message) {
+    await ctx.reply("Usage: /broadcast <message> or reply to a text/caption message with /broadcast");
+    return;
+  }
+
+  if (getBroadcastProgress()?.running) {
+    await ctx.reply("A broadcast is already running. Use /broadcaststatus to check progress.");
+    return;
+  }
+
+  const targetCount = await getBroadcastTargetCount(ctx.db);
+  await ctx.reply(`📣 Broadcast started to ${targetCount} users.`);
+
+  const result = await runTextBroadcast({
+    database: ctx.db,
+    api: ctx.api,
+    text: message,
+  });
+
+  await ctx.reply(
+    [
+      "📣 Broadcast finished.",
+      `Sent: ${result.sent}`,
+      `Failed: ${result.failed}`,
+      `Blocked: ${result.blocked}`,
+      `Total targeted: ${result.totalTargeted}`,
+    ].join("\n"),
+  );
+}
+
+async function handleBroadcastStatus(ctx: BotContext): Promise<void> {
+  const progress = getBroadcastProgress();
+  if (!progress) {
+    await ctx.reply("No broadcast has been started since this process booted.");
+    return;
+  }
+
+  await ctx.reply(
+    [
+      `Broadcast status: ${progress.running ? "running" : "finished"}`,
+      `Sent: ${progress.sent}`,
+      `Failed: ${progress.failed}`,
+      `Blocked: ${progress.blocked}`,
+      `Total targeted: ${progress.totalTargeted}`,
+    ].join("\n"),
+  );
 }
 
 function getCommandPayload(ctx: BotContext): string {
@@ -250,6 +317,10 @@ function getCommandPayload(ctx: BotContext): string {
 function getReplyText(ctx: BotContext): string {
   const reply = ctx.message?.reply_to_message;
   return (reply?.text ?? reply?.caption ?? "").trim();
+}
+
+function getBotMode(ctx: BotContext): "polling" | "webhook" {
+  return ctx.appConfig.isProduction || ctx.appConfig.publicUrl ? "webhook" : "polling";
 }
 
 function parsePositiveArgs(payload: string, expectedCount: 1): [number] | undefined;

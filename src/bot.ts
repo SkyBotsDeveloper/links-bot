@@ -1,15 +1,15 @@
-import { Bot, type Context } from "grammy";
+import { Bot, GrammyError, type Context } from "grammy";
 import type { AppConfig } from "./config";
 import type { DatabaseHandle } from "./db";
 import {
-  CALLBACK_LOCKED_PREFIX,
   CALLBACK_NOOP,
   CALLBACK_PAGE_PREFIX,
   buildPublicKeyboard,
 } from "./keyboards";
-import { LOCKED_PAGE_MESSAGE, PREPARING_MESSAGE } from "./format";
+import { PREPARING_MESSAGE } from "./format";
 import { getPublicPage, getStartPage } from "./pageService";
 import { registerOwnerCommands } from "./owner";
+import { markUserBlocked, trackUserInteraction } from "./userService";
 import {
   configureSafeTelegramApi,
   ignoreMessageNotModified,
@@ -31,12 +31,17 @@ export function createLinksBot(appConfig: AppConfig, db: DatabaseHandle): Bot<Bo
     await next();
   });
 
+  bot.use(async (ctx, next) => {
+    if (ctx.from) {
+      await trackUserInteraction(ctx.db, ctx.from, { isStart: isStartCommand(ctx) });
+    }
+    await next();
+  });
+
   bot.command("start", async (ctx) => {
     const startPage = await getStartPage(ctx.db, ctx.appConfig.linksPerPage);
     if (startPage.preparing || !startPage.rendered) {
-      await ctx.reply(PREPARING_MESSAGE, {
-        reply_markup: buildPublicKeyboard(1, startPage.stats),
-      });
+      await ctx.reply(PREPARING_MESSAGE);
       return;
     }
 
@@ -65,13 +70,6 @@ export function createLinksBot(appConfig: AppConfig, db: DatabaseHandle): Bot<Bo
     );
   });
 
-  bot.callbackQuery(new RegExp(`^${CALLBACK_LOCKED_PREFIX}(\\d+)$`), async (ctx) => {
-    await ctx.answerCallbackQuery({
-      text: LOCKED_PAGE_MESSAGE,
-      show_alert: true,
-    });
-  });
-
   bot.callbackQuery(CALLBACK_NOOP, async (ctx) => {
     await ctx.answerCallbackQuery();
   });
@@ -79,8 +77,30 @@ export function createLinksBot(appConfig: AppConfig, db: DatabaseHandle): Bot<Bo
   registerOwnerCommands(bot);
 
   bot.catch((error) => {
-    logger.error("Bot handler failed.", error.error);
+    const caught = error.error;
+    if (caught instanceof GrammyError) {
+      logger.error(
+        `Bot handler failed: method=${caught.method}, code=${caught.error_code}, description=${caught.description}`,
+      );
+      if (caught.error_code === 403 && error.ctx.from) {
+        void markUserBlocked(db, error.ctx.from.id).catch((markError) => {
+          logger.error("Failed to mark blocked user after Telegram 403.", safeErrorMessage(markError));
+        });
+      }
+      return;
+    }
+
+    logger.error("Bot handler failed.", safeErrorMessage(caught));
   });
 
   return bot;
+}
+
+function isStartCommand(ctx: BotContext): boolean {
+  const text = ctx.message?.text;
+  return text ? /^\/start(?:@[a-zA-Z0-9_]+)?(?:\s|$)/u.test(text) : false;
+}
+
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
 }

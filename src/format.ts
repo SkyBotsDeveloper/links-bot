@@ -1,10 +1,10 @@
 import type { LinkCounts } from "./linkService";
 import type { PageStats } from "./pageService";
+import type { UserCounts } from "./userService";
 
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
 export const PREPARING_MESSAGE =
   "🚧 Links collection abhi prepare ho raha hai. Please joined rahiye, first drop jaldi unlock hoga.";
-export const LOCKED_PAGE_MESSAGE = "🔒 Ye page 50 links complete hone ke baad unlock hoga.";
 export const NOT_ALLOWED_MESSAGE = "❌ Not allowed.";
 
 export interface RenderedMessage {
@@ -43,8 +43,8 @@ export function formatAddSummary(
     label,
     ...ignored,
     `Total links: ${counts.active}`,
-    `Unlocked pages: ${stats.completedPages}`,
-    `Pending next page: ${stats.pendingLinks}/${stats.linksPerPage}`,
+    `Total pages: ${stats.totalPages}`,
+    `Links on last page: ${stats.linksOnLastPage}/${stats.linksPerPage}`,
   ].join("\n");
 }
 
@@ -52,9 +52,8 @@ export function formatListPages(counts: LinkCounts, stats: PageStats): string {
   return [
     `Total active links: ${counts.active}`,
     `Links per page: ${stats.linksPerPage}`,
-    `Unlocked public pages: ${stats.completedPages}`,
-    `Pending links in next page: ${stats.pendingLinks}`,
-    `Locked pending page number: ${stats.lockedPendingPage ?? "none"}`,
+    `Total public pages: ${stats.totalPages}`,
+    `Links on last page: ${stats.linksOnLastPage}`,
     `Total removed links: ${counts.removed}`,
   ].join("\n");
 }
@@ -63,22 +62,28 @@ export function formatStats(input: {
   mongoConnected: boolean;
   counts: LinkCounts;
   stats: PageStats;
+  userCounts: UserCounts;
   cacheEntries: number;
   uptimeSeconds: number;
   memoryUsage: NodeJS.MemoryUsage;
+  botMode: "polling" | "webhook";
 }): string {
   const memory = input.memoryUsage;
   return [
     `MongoDB connected: ${input.mongoConnected ? "yes" : "no"}`,
     `Active links: ${input.counts.active}`,
     `Removed links: ${input.counts.removed}`,
-    `Unlocked pages: ${input.stats.completedPages}`,
-    `Pending links: ${input.stats.pendingLinks}`,
+    `Total pages: ${input.stats.totalPages}`,
+    `Links per page: ${input.stats.linksPerPage}`,
+    `Total tracked users: ${input.userCounts.totalTracked}`,
+    `Active broadcast users: ${input.userCounts.activeBroadcastUsers}`,
+    `Blocked users: ${input.userCounts.blockedUsers}`,
     `Cache entries: ${input.cacheEntries}`,
     `Uptime: ${formatDuration(input.uptimeSeconds)}`,
     `Memory: rss ${formatBytes(memory.rss)}, heap ${formatBytes(memory.heapUsed)}/${formatBytes(
       memory.heapTotal,
     )}`,
+    `Bot mode: ${input.botMode}`,
   ].join("\n");
 }
 
@@ -112,7 +117,7 @@ function composePlainLinksPage(
       ];
 
   if (ownerPreviewIncomplete) {
-    footer.push("", "⚠️ Owner preview: this page is incomplete and locked for normal users.");
+    footer.push("", "⚠️ Owner preview: this page currently has fewer than 50 links.");
   }
 
   return [...header, ...links.map((url, index) => `${index + 1}. ${url}`), ...footer].join("\n");
@@ -130,7 +135,7 @@ function composeHtmlLinkPage(links: string[], ownerPreviewIncomplete: boolean | 
   ];
 
   if (ownerPreviewIncomplete) {
-    lines.push("", "⚠️ Owner preview: this page is incomplete and locked for normal users.");
+    lines.push("", "⚠️ Owner preview: this page currently has fewer than 50 links.");
   }
 
   return lines.join("\n");

@@ -20,11 +20,28 @@ export interface SettingsDocument {
   updatedAt: Date;
 }
 
+export interface UserDocument {
+  _id: number;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
+  languageCode?: string;
+  isBot: boolean;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  startCount: number;
+  messageCount: number;
+  isBlocked: boolean;
+  blockedAt?: Date;
+  lastBroadcastAt?: Date;
+}
+
 export interface DatabaseHandle {
   client: MongoClient;
   db: Db;
   links: Collection<LinkDocument>;
   settings: Collection<SettingsDocument>;
+  users: Collection<UserDocument>;
 }
 
 let handle: DatabaseHandle | undefined;
@@ -51,6 +68,7 @@ export async function connectDatabase(mongodbUri: string): Promise<DatabaseHandl
     db,
     links: db.collection<LinkDocument>("links"),
     settings: db.collection<SettingsDocument>("settings"),
+    users: db.collection<UserDocument>("users"),
   };
 
   return handle;
@@ -62,6 +80,8 @@ export async function ensureIndexes(database: DatabaseHandle): Promise<void> {
     database.links.createIndex({ url: 1 }),
     database.links.createIndex({ createdAt: -1 }),
     database.settings.createIndex({ key: 1 }, { unique: true }),
+    database.users.createIndex({ lastSeenAt: -1 }),
+    database.users.createIndex({ isBlocked: 1 }),
   ]);
 }
 

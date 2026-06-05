@@ -5,11 +5,8 @@ import { getActiveLinkCount, getActiveLinksPage } from "./linkService";
 export interface PageStats {
   totalActiveLinks: number;
   linksPerPage: number;
-  completedPages: number;
-  hasPendingNextPage: boolean;
-  visibleButtonPages: number;
-  pendingLinks: number;
-  lockedPendingPage?: number;
+  totalPages: number;
+  linksOnLastPage: number;
 }
 
 export interface PublicPageResult {
@@ -32,19 +29,16 @@ export interface OwnerPreviewResult {
 const pageCache = new Map<number, RenderedMessage>();
 
 export function calculatePageStats(totalActiveLinks: number, linksPerPage: number): PageStats {
-  const completedPages = Math.floor(totalActiveLinks / linksPerPage);
-  const pendingLinks = totalActiveLinks % linksPerPage;
-  const hasPendingNextPage = pendingLinks > 0;
-  const visibleButtonPages = completedPages + (hasPendingNextPage ? 1 : 0);
+  const totalPages = Math.ceil(totalActiveLinks / linksPerPage);
+  const remainder = totalActiveLinks % linksPerPage;
+  const linksOnLastPage =
+    totalActiveLinks === 0 ? 0 : remainder === 0 ? linksPerPage : remainder;
 
   return {
     totalActiveLinks,
     linksPerPage,
-    completedPages,
-    hasPendingNextPage,
-    visibleButtonPages,
-    pendingLinks,
-    lockedPendingPage: hasPendingNextPage ? completedPages + 1 : undefined,
+    totalPages,
+    linksOnLastPage,
   };
 }
 
@@ -60,7 +54,7 @@ export async function getStartPage(
   linksPerPage: number,
 ): Promise<StartPageResult> {
   const stats = await getPageStats(database, linksPerPage);
-  if (stats.completedPages < 1) {
+  if (stats.totalPages < 1) {
     return { preparing: true, stats };
   }
 
@@ -83,7 +77,7 @@ export async function getPublicPage(
   }
 
   const stats = knownStats ?? (await getPageStats(database, linksPerPage));
-  if (page > stats.completedPages) {
+  if (page > stats.totalPages) {
     return undefined;
   }
 
@@ -93,7 +87,7 @@ export async function getPublicPage(
   }
 
   const links = await getActiveLinksPage(database, page, linksPerPage);
-  if (links.length !== linksPerPage) {
+  if (links.length === 0) {
     return undefined;
   }
 
