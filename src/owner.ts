@@ -8,6 +8,16 @@ import {
   formatStats,
 } from "./format";
 import {
+  HELP_CALLBACK_PREFIX,
+  HELP_PERMISSION_MESSAGE,
+  PUBLIC_HELP_MESSAGE,
+  buildHelpKeyboard,
+  getFullGuideMessages,
+  getHelpMessage,
+  parseHelpSection,
+  type HelpSection,
+} from "./helpService";
+import {
   addLink,
   addLinks,
   getLinkCounts,
@@ -24,6 +34,7 @@ import { isMongoConnected } from "./db";
 import {
   addSudoUser,
   formatSudoResolveError,
+  isAdmin,
   isOwner,
   listActiveSudoUsers,
   removeSudoUser,
@@ -33,6 +44,7 @@ import {
 } from "./sudoService";
 import { getBroadcastTargetCount, getUserCounts } from "./userService";
 import { cleanSingleUrl, extractUrlsFromText, stripCommandPrefix } from "./utils/urls";
+import { ignoreMessageNotModified } from "./utils/telegramSafe";
 import type { BotContext } from "./bot";
 
 type AdminHandler = (ctx: BotContext, actorId: number) => Promise<void>;
@@ -56,7 +68,9 @@ const ADMIN_COMMANDS = [
 ];
 
 export function registerOwnerCommands(bot: Bot<BotContext>): void {
-  adminCommand(bot, "help", showHelp);
+  bot.command("help", handleHelp);
+  bot.callbackQuery(new RegExp(`^${HELP_CALLBACK_PREFIX}([a-z]+)$`), handleHelpCallback);
+
   adminCommand(bot, "addlink", handleAddLink);
   adminCommand(bot, "addlinks", handleAddLinks);
   adminCommand(bot, "removelink", handleRemoveLink);
@@ -99,43 +113,82 @@ export function isOwnerCommand(command: string): boolean {
   return OWNER_ONLY_COMMANDS.includes(command) || ADMIN_COMMANDS.includes(command);
 }
 
-async function showHelp(ctx: BotContext): Promise<void> {
-  await ctx.reply(
-    [
-      "👑 Owner Commands:",
-      "- /addsudo <user_id ya @username>",
-      "- /rmsudo <user_id ya @username>",
-      "- /listsudo",
-      "",
-      "🛠 Admin Commands:",
-      "- /addlink <url>",
-      "- /addlinks",
-      "- /removelink <page> <number>",
-      "- /removepage <page>",
-      "- /listpages",
-      "- /preview <page>",
-      "- /stats",
-      "- /reloadcache",
-      "",
-      "📣 Broadcast:",
-      "- /broadcast <message>",
-      "- Kisi message/photo/video/sticker/document par reply karke /broadcast bhejo",
-      "- Typo aliases bhi chalenge: /broardcast aur /broardacast",
-      "",
-      "Broadcast sab tracked users ko jayega jinhone bot start/interact kiya hai.",
-      "",
-      "Examples:",
-      "/addlink https://example.com/video",
-      "/addlinks",
-      "https://example.com/a",
-      "https://example.com/b",
-      "/removelink 1 12",
-      "/removepage 2",
-      "/preview 3",
-      "/broadcast Hello sabko",
-    ].join("\n"),
-    { link_preview_options: { is_disabled: true } },
+async function handleHelp(ctx: BotContext): Promise<void> {
+  const userId = ctx.from?.id;
+  const sectionInput = getCommandPayload(ctx);
+  const section = parseHelpSection(sectionInput);
+  const hasSectionInput = sectionInput.length > 0;
+
+  if (!userId || !(await isAdmin(ctx.appConfig, ctx.db, userId))) {
+    await ctx.reply(hasSectionInput ? HELP_PERMISSION_MESSAGE : PUBLIC_HELP_MESSAGE);
+    return;
+  }
+
+  if (!section) {
+    await ctx.reply(
+      ["⚠️ Galat help section.", "Example: /help links", "Ya main menu ke liye: /help"].join("\n"),
+      { reply_markup: buildHelpKeyboard() },
+    );
+    return;
+  }
+
+  await sendHelpSection(ctx, section);
+}
+
+async function handleHelpCallback(ctx: BotContext): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId || !(await isAdmin(ctx.appConfig, ctx.db, userId))) {
+    await ctx.answerCallbackQuery({ text: HELP_PERMISSION_MESSAGE, show_alert: true });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+  const section = parseHelpSection(ctx.match?.[1] ?? "");
+  if (!section) {
+    return;
+  }
+
+  if (section === "all") {
+    await ignoreMessageNotModified(() =>
+      ctx.editMessageText(getHelpMessage("all"), {
+        reply_markup: buildHelpKeyboard(),
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+    for (const message of getFullGuideMessages()) {
+      await ctx.reply(message, {
+        link_preview_options: { is_disabled: true },
+      });
+    }
+    return;
+  }
+
+  await ignoreMessageNotModified(() =>
+    ctx.editMessageText(getHelpMessage(section), {
+      reply_markup: buildHelpKeyboard(),
+      link_preview_options: { is_disabled: true },
+    }),
   );
+}
+
+async function sendHelpSection(ctx: BotContext, section: HelpSection): Promise<void> {
+  if (section === "all") {
+    await ctx.reply(getHelpMessage("all"), {
+      reply_markup: buildHelpKeyboard(),
+      link_preview_options: { is_disabled: true },
+    });
+    for (const message of getFullGuideMessages()) {
+      await ctx.reply(message, {
+        link_preview_options: { is_disabled: true },
+      });
+    }
+    return;
+  }
+
+  await ctx.reply(getHelpMessage(section), {
+    reply_markup: buildHelpKeyboard(),
+    link_preview_options: { is_disabled: true },
+  });
 }
 
 async function handleAddSudo(ctx: BotContext, ownerId: number): Promise<void> {
@@ -244,7 +297,7 @@ async function handleAddLinks(ctx: BotContext, actorId: number): Promise<void> {
 
   const extracted = extractUrlsFromText(sourceText);
   if (extracted.urls.length === 0) {
-    await ctx.reply(`⚠️ Koi valid link nahi mila.\nInvalid lines ignore hue: ${extracted.invalidLines}`);
+    await ctx.reply(`⚠️ Koi valid link nahi mila.\nGalat lines ignore hue: ${extracted.invalidLines}`);
     return;
   }
 
@@ -411,7 +464,7 @@ async function handleBroadcast(ctx: BotContext): Promise<void> {
       "",
       `Total target: ${result.totalTargeted}`,
       `Sent: ${result.sent}`,
-      `Failed: ${result.failed}`,
+      `Fail hua: ${result.failed}`,
       `Blocked: ${result.blocked}`,
     ].join("\n"),
   );
@@ -430,7 +483,7 @@ async function handleBroadcastStatus(ctx: BotContext): Promise<void> {
       `Mode: ${progress.mode}`,
       `Total target: ${progress.totalTargeted}`,
       `Sent: ${progress.sent}`,
-      `Failed: ${progress.failed}`,
+      `Fail hua: ${progress.failed}`,
       `Blocked: ${progress.blocked}`,
     ].join("\n"),
   );

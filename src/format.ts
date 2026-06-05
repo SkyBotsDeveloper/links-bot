@@ -43,7 +43,7 @@ export function formatAddSummary(
   ignoredLines?: number,
 ): string {
   const ignored =
-    ignoredLines === undefined ? [] : [`Invalid lines ignore hue: ${ignoredLines}`];
+    ignoredLines === undefined ? [] : [`Galat lines ignore hue: ${ignoredLines}`];
   return [
     label,
     ...ignored,

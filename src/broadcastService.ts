@@ -45,7 +45,7 @@ export async function runBroadcast(input: {
   content: BroadcastContent;
 }): Promise<BroadcastResult> {
   if (currentProgress?.running) {
-    throw new Error("A broadcast is already running.");
+    throw new Error("Ek broadcast already chal raha hai.");
   }
 
   const totalTargeted = await getBroadcastTargetCount(input.database);
