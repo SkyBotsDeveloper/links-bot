@@ -36,12 +36,25 @@ export interface UserDocument {
   lastBroadcastAt?: Date;
 }
 
+export interface SudoUserDocument {
+  _id: number;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  addedBy: number;
+  addedAt: Date;
+  isActive: boolean;
+  removedBy?: number;
+  removedAt?: Date;
+}
+
 export interface DatabaseHandle {
   client: MongoClient;
   db: Db;
   links: Collection<LinkDocument>;
   settings: Collection<SettingsDocument>;
   users: Collection<UserDocument>;
+  sudoUsers: Collection<SudoUserDocument>;
 }
 
 let handle: DatabaseHandle | undefined;
@@ -69,6 +82,7 @@ export async function connectDatabase(mongodbUri: string): Promise<DatabaseHandl
     links: db.collection<LinkDocument>("links"),
     settings: db.collection<SettingsDocument>("settings"),
     users: db.collection<UserDocument>("users"),
+    sudoUsers: db.collection<SudoUserDocument>("sudo_users"),
   };
 
   return handle;
@@ -82,6 +96,8 @@ export async function ensureIndexes(database: DatabaseHandle): Promise<void> {
     database.settings.createIndex({ key: 1 }, { unique: true }),
     database.users.createIndex({ lastSeenAt: -1 }),
     database.users.createIndex({ isBlocked: 1 }),
+    database.sudoUsers.createIndex({ isActive: 1 }),
+    database.sudoUsers.createIndex({ username: 1 }),
   ]);
 }
 

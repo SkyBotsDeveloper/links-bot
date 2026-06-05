@@ -5,7 +5,11 @@ import type { UserCounts } from "./userService";
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
 export const PREPARING_MESSAGE =
   "🚧 Links collection abhi prepare ho raha hai. Please joined rahiye, first drop jaldi unlock hoga.";
-export const NOT_ALLOWED_MESSAGE = "❌ Not allowed.";
+export const NOT_ALLOWED_MESSAGE = "❌ Aapko is command ki permission nahi hai.";
+export const OWNER_ONLY_MESSAGE = "❌ Ye command sirf Owner ke liye hai.";
+export const ADMIN_ONLY_MESSAGE = "❌ Ye command sirf Owner/Sudo Admin ke liye hai.";
+export const SUDO_USERNAME_NOT_FOUND_MESSAGE =
+  "⚠️ Is username ka user ID nahi mila. Pehle us user se bot me /start karwao, ya direct numeric user ID use karo.";
 
 export interface RenderedMessage {
   text: string;
@@ -38,23 +42,24 @@ export function formatAddSummary(
   stats: PageStats,
   ignoredLines?: number,
 ): string {
-  const ignored = ignoredLines === undefined ? [] : [`Ignored ${ignoredLines} invalid lines.`];
+  const ignored =
+    ignoredLines === undefined ? [] : [`Invalid lines ignore hue: ${ignoredLines}`];
   return [
     label,
     ...ignored,
     `Total links: ${counts.active}`,
     `Total pages: ${stats.totalPages}`,
-    `Links on last page: ${stats.linksOnLastPage}/${stats.linksPerPage}`,
   ].join("\n");
 }
 
 export function formatListPages(counts: LinkCounts, stats: PageStats): string {
   return [
-    `Total active links: ${counts.active}`,
+    "📄 Link Pages",
+    `Active links: ${counts.active}`,
     `Links per page: ${stats.linksPerPage}`,
-    `Total public pages: ${stats.totalPages}`,
-    `Links on last page: ${stats.linksOnLastPage}`,
-    `Total removed links: ${counts.removed}`,
+    `Total pages: ${stats.totalPages}`,
+    `Last page links: ${stats.linksOnLastPage}`,
+    `Removed links: ${counts.removed}`,
   ].join("\n");
 }
 
@@ -70,13 +75,14 @@ export function formatStats(input: {
 }): string {
   const memory = input.memoryUsage;
   return [
-    `MongoDB connected: ${input.mongoConnected ? "yes" : "no"}`,
+    "📊 Bot Stats",
+    `MongoDB: ${input.mongoConnected ? "connected" : "not connected"}`,
     `Active links: ${input.counts.active}`,
     `Removed links: ${input.counts.removed}`,
     `Total pages: ${input.stats.totalPages}`,
     `Links per page: ${input.stats.linksPerPage}`,
-    `Total tracked users: ${input.userCounts.totalTracked}`,
-    `Active broadcast users: ${input.userCounts.activeBroadcastUsers}`,
+    `Tracked users: ${input.userCounts.totalTracked}`,
+    `Broadcast users: ${input.userCounts.activeBroadcastUsers}`,
     `Blocked users: ${input.userCounts.blockedUsers}`,
     `Cache entries: ${input.cacheEntries}`,
     `Uptime: ${formatDuration(input.uptimeSeconds)}`,
@@ -117,7 +123,7 @@ function composePlainLinksPage(
       ];
 
   if (ownerPreviewIncomplete) {
-    footer.push("", "⚠️ Owner preview: this page currently has fewer than 50 links.");
+    footer.push("", "⚠️ Admin preview: is page me abhi 50 se kam links hain.");
   }
 
   return [...header, ...links.map((url, index) => `${index + 1}. ${url}`), ...footer].join("\n");
@@ -128,14 +134,14 @@ function composeHtmlLinkPage(links: string[], ownerPreviewIncomplete: boolean | 
     "🔥 <b>VIRAL VIDEOS DROP</b>",
     "📂 ACCESS LINKS BELOW 👇",
     "",
-    ...links.map((url, index) => `${index + 1}. <a href="${escapeHtmlAttribute(url)}">Open link</a>`),
+    ...links.map((url, index) => `${index + 1}. <a href="${escapeHtmlAttribute(url)}">Link kholo</a>`),
     "",
     "✅ Stay Joined For Lifetime Free Updates",
     "👀 More Exclusive Content Coming Daily",
   ];
 
   if (ownerPreviewIncomplete) {
-    lines.push("", "⚠️ Owner preview: this page currently has fewer than 50 links.");
+    lines.push("", "⚠️ Admin preview: is page me abhi 50 se kam links hain.");
   }
 
   return lines.join("\n");

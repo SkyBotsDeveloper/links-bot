@@ -1,7 +1,8 @@
 import type { Bot } from "grammy";
-import { getBroadcastProgress, runTextBroadcast } from "./broadcastService";
+import { getBroadcastProgress, runBroadcast, type BroadcastContent } from "./broadcastService";
 import {
   NOT_ALLOWED_MESSAGE,
+  SUDO_USERNAME_NOT_FOUND_MESSAGE,
   formatAddSummary,
   formatListPages,
   formatStats,
@@ -20,13 +21,25 @@ import {
   getPageCacheSize,
 } from "./pageService";
 import { isMongoConnected } from "./db";
+import {
+  addSudoUser,
+  formatSudoResolveError,
+  isOwner,
+  listActiveSudoUsers,
+  removeSudoUser,
+  requireAdmin,
+  requireOwner,
+  resolveSudoTarget,
+} from "./sudoService";
 import { getBroadcastTargetCount, getUserCounts } from "./userService";
 import { cleanSingleUrl, extractUrlsFromText, stripCommandPrefix } from "./utils/urls";
 import type { BotContext } from "./bot";
 
-type OwnerHandler = (ctx: BotContext, ownerId: number) => Promise<void>;
+type AdminHandler = (ctx: BotContext, actorId: number) => Promise<void>;
+type CommandName = string | string[];
 
-const OWNER_COMMANDS = [
+const OWNER_ONLY_COMMANDS = ["addsudo", "rmsudo", "listsudo"];
+const ADMIN_COMMANDS = [
   "help",
   "addlink",
   "addlinks",
@@ -37,28 +50,44 @@ const OWNER_COMMANDS = [
   "stats",
   "reloadcache",
   "broadcast",
+  "broardcast",
+  "broardacast",
   "broadcaststatus",
 ];
 
 export function registerOwnerCommands(bot: Bot<BotContext>): void {
-  ownerCommand(bot, "help", showHelp);
-  ownerCommand(bot, "addlink", handleAddLink);
-  ownerCommand(bot, "addlinks", handleAddLinks);
-  ownerCommand(bot, "removelink", handleRemoveLink);
-  ownerCommand(bot, "removepage", handleRemovePage);
-  ownerCommand(bot, "listpages", handleListPages);
-  ownerCommand(bot, "preview", handlePreview);
-  ownerCommand(bot, "stats", handleStats);
-  ownerCommand(bot, "reloadcache", handleReloadCache);
-  ownerCommand(bot, "broadcast", handleBroadcast);
-  ownerCommand(bot, "broadcaststatus", handleBroadcastStatus);
+  adminCommand(bot, "help", showHelp);
+  adminCommand(bot, "addlink", handleAddLink);
+  adminCommand(bot, "addlinks", handleAddLinks);
+  adminCommand(bot, "removelink", handleRemoveLink);
+  adminCommand(bot, "removepage", handleRemovePage);
+  adminCommand(bot, "listpages", handleListPages);
+  adminCommand(bot, "preview", handlePreview);
+  adminCommand(bot, "stats", handleStats);
+  adminCommand(bot, "reloadcache", handleReloadCache);
+  adminCommand(bot, ["broadcast", "broardcast", "broardacast"], handleBroadcast);
+  adminCommand(bot, "broadcaststatus", handleBroadcastStatus);
+
+  ownerCommand(bot, "addsudo", handleAddSudo);
+  ownerCommand(bot, "rmsudo", handleRemoveSudo);
+  ownerCommand(bot, "listsudo", handleListSudo);
 }
 
-function ownerCommand(bot: Bot<BotContext>, command: string, handler: OwnerHandler): void {
+function adminCommand(bot: Bot<BotContext>, command: CommandName, handler: AdminHandler): void {
   bot.command(command, async (ctx) => {
-    const ownerId = ctx.from?.id;
-    if (!ownerId || !ctx.appConfig.ownerIds.has(ownerId)) {
-      await ctx.reply(NOT_ALLOWED_MESSAGE);
+    const actorId = await requireAdmin(ctx);
+    if (!actorId) {
+      return;
+    }
+
+    await handler(ctx, actorId);
+  });
+}
+
+function ownerCommand(bot: Bot<BotContext>, command: CommandName, handler: AdminHandler): void {
+  bot.command(command, async (ctx) => {
+    const ownerId = await requireOwner(ctx);
+    if (!ownerId) {
       return;
     }
 
@@ -67,25 +96,33 @@ function ownerCommand(bot: Bot<BotContext>, command: string, handler: OwnerHandl
 }
 
 export function isOwnerCommand(command: string): boolean {
-  return OWNER_COMMANDS.includes(command);
+  return OWNER_ONLY_COMMANDS.includes(command) || ADMIN_COMMANDS.includes(command);
 }
 
 async function showHelp(ctx: BotContext): Promise<void> {
   await ctx.reply(
     [
-      "Owner Commands:",
+      "👑 Owner Commands:",
+      "- /addsudo <user_id ya @username>",
+      "- /rmsudo <user_id ya @username>",
+      "- /listsudo",
+      "",
+      "🛠 Admin Commands:",
       "- /addlink <url>",
-      "- /addlinks <many urls>",
-      "- /addlinks as reply to a message containing many URLs",
+      "- /addlinks",
       "- /removelink <page> <number>",
       "- /removepage <page>",
       "- /listpages",
       "- /preview <page>",
       "- /stats",
       "- /reloadcache",
+      "",
+      "📣 Broadcast:",
       "- /broadcast <message>",
-      "- Reply to a message with /broadcast",
-      "- /broadcaststatus",
+      "- Kisi message/photo/video/sticker/document par reply karke /broadcast bhejo",
+      "- Typo aliases bhi chalenge: /broardcast aur /broardacast",
+      "",
+      "Broadcast sab tracked users ko jayega jinhone bot start/interact kiya hai.",
       "",
       "Examples:",
       "/addlink https://example.com/video",
@@ -95,68 +132,145 @@ async function showHelp(ctx: BotContext): Promise<void> {
       "/removelink 1 12",
       "/removepage 2",
       "/preview 3",
-      "/broadcast Hello everyone",
-      "",
-      "/broadcast sends a text message to all tracked users who have interacted with the bot and are not blocked.",
+      "/broadcast Hello sabko",
     ].join("\n"),
     { link_preview_options: { is_disabled: true } },
   );
 }
 
-async function handleAddLink(ctx: BotContext, ownerId: number): Promise<void> {
-  const url = cleanSingleUrl(getCommandPayload(ctx));
-  if (!url) {
-    await ctx.reply("Usage: /addlink <http-or-https-url>");
+async function handleAddSudo(ctx: BotContext, ownerId: number): Promise<void> {
+  const payload = getCommandPayload(ctx);
+  const resolved = await resolveSudoTarget(ctx.db, payload);
+  if (!resolved.ok) {
+    await ctx.reply(formatSudoResolveError(resolved));
     return;
   }
 
-  await addLink(ctx.db, url, ownerId);
+  if (isOwner(ctx.appConfig, resolved.target.userId)) {
+    await ctx.reply("ℹ️ Ye user Owner hai, sudo add karne ki zarurat nahi.");
+    return;
+  }
+
+  const result = await addSudoUser(ctx.db, resolved.target, ownerId);
+  if (result === "already_active") {
+    await ctx.reply("ℹ️ Ye user pehle se sudo admin hai.");
+    return;
+  }
+
+  await ctx.reply(
+    [
+      "✅ Sudo admin add ho gaya.",
+      `User ID: ${resolved.target.userId}`,
+      "Ab ye admin commands use kar sakta hai.",
+    ].join("\n"),
+  );
+}
+
+async function handleRemoveSudo(ctx: BotContext, ownerId: number): Promise<void> {
+  const payload = getCommandPayload(ctx);
+  const resolved = await resolveSudoTarget(ctx.db, payload);
+  if (!resolved.ok) {
+    await ctx.reply(
+      resolved.reason === "username_not_found"
+        ? "⚠️ Ye user active sudo admin nahi hai."
+        : ["⚠️ Galat format.", "Example: /rmsudo 123456789", "Ya: /rmsudo @username"].join("\n"),
+    );
+    return;
+  }
+
+  if (isOwner(ctx.appConfig, resolved.target.userId)) {
+    await ctx.reply("❌ Owner ko sudo se remove nahi kiya ja sakta.");
+    return;
+  }
+
+  const removed = await removeSudoUser(ctx.db, resolved.target, ownerId);
+  await ctx.reply(removed ? "✅ Sudo admin remove ho gaya." : "⚠️ Ye user active sudo admin nahi hai.");
+}
+
+async function handleListSudo(ctx: BotContext): Promise<void> {
+  const sudoUsers = await listActiveSudoUsers(ctx.db);
+  if (sudoUsers.length === 0) {
+    await ctx.reply("Abhi koi sudo admin add nahi hai.");
+    return;
+  }
+
+  await ctx.reply(
+    [
+      "👑 Active Sudo Admins",
+      ...sudoUsers.map((user, index) => {
+        const username = user.username ? ` @${user.username}` : "";
+        return `${index + 1}. ${user._id}${username} | added: ${formatDate(user.addedAt)}`;
+      }),
+    ].join("\n"),
+  );
+}
+
+async function handleAddLink(ctx: BotContext, actorId: number): Promise<void> {
+  const url = cleanSingleUrl(getCommandPayload(ctx));
+  if (!url) {
+    await ctx.reply("⚠️ Galat format.\nExample: /addlink https://example.com/video");
+    return;
+  }
+
+  await addLink(ctx.db, url, actorId);
   clearPageCache();
 
   const counts = await getLinkCounts(ctx.db);
   const stats = calculatePageStats(counts.active, ctx.appConfig.linksPerPage);
-  await ctx.reply(formatAddSummary("✅ Link added.", counts, stats), {
+  await ctx.reply(formatAddSummary("✅ Link add ho gaya.", counts, stats), {
     link_preview_options: { is_disabled: true },
   });
 }
 
-async function handleAddLinks(ctx: BotContext, ownerId: number): Promise<void> {
+async function handleAddLinks(ctx: BotContext, actorId: number): Promise<void> {
   const payload = getCommandPayload(ctx);
   const replyText = getReplyText(ctx);
   const sourceText = payload || replyText;
 
   if (!sourceText) {
-    await ctx.reply("Usage: /addlinks <many urls> or reply to a message with /addlinks");
+    await ctx.reply(
+      [
+        "⚠️ Galat format.",
+        "Example:",
+        "/addlinks",
+        "https://example.com/a",
+        "https://example.com/b",
+        "",
+        "Ya links wale message par reply karke /addlinks bhejo.",
+      ].join("\n"),
+    );
     return;
   }
 
   const extracted = extractUrlsFromText(sourceText);
   if (extracted.urls.length === 0) {
-    await ctx.reply(`No valid links found.\nIgnored ${extracted.invalidLines} invalid lines.`);
+    await ctx.reply(`⚠️ Koi valid link nahi mila.\nInvalid lines ignore hue: ${extracted.invalidLines}`);
     return;
   }
 
-  const added = await addLinks(ctx.db, extracted.urls, ownerId);
+  const added = await addLinks(ctx.db, extracted.urls, actorId);
   clearPageCache();
 
   const counts = await getLinkCounts(ctx.db);
   const stats = calculatePageStats(counts.active, ctx.appConfig.linksPerPage);
   await ctx.reply(
-    formatAddSummary(`✅ Added ${added} links.`, counts, stats, extracted.invalidLines),
+    formatAddSummary(`✅ ${added} links add ho gaye.`, counts, stats, extracted.invalidLines),
     { link_preview_options: { is_disabled: true } },
   );
 }
 
-async function handleRemoveLink(ctx: BotContext, ownerId: number): Promise<void> {
+async function handleRemoveLink(ctx: BotContext, actorId: number): Promise<void> {
   const args = parsePositiveArgs(getCommandPayload(ctx), 2);
   if (!args) {
-    await ctx.reply(`Usage: /removelink <page> <number 1-${ctx.appConfig.linksPerPage}>`);
+    await ctx.reply(
+      `⚠️ Galat format.\nExample: /removelink 1 2\nNumber 1 se ${ctx.appConfig.linksPerPage} ke beech hona chahiye.`,
+    );
     return;
   }
 
   const [page, number] = args;
   if (number > ctx.appConfig.linksPerPage) {
-    await ctx.reply(`Number must be between 1 and ${ctx.appConfig.linksPerPage}.`);
+    await ctx.reply(`⚠️ Number 1 se ${ctx.appConfig.linksPerPage} ke beech hona chahiye.`);
     return;
   }
 
@@ -165,11 +279,11 @@ async function handleRemoveLink(ctx: BotContext, ownerId: number): Promise<void>
     page,
     number,
     ctx.appConfig.linksPerPage,
-    ownerId,
+    actorId,
   );
 
   if (!removed) {
-    await ctx.reply("No active link found at that page position.");
+    await ctx.reply("⚠️ Is page/number par active link nahi mila.");
     return;
   }
 
@@ -178,32 +292,31 @@ async function handleRemoveLink(ctx: BotContext, ownerId: number): Promise<void>
   const stats = calculatePageStats(counts.active, ctx.appConfig.linksPerPage);
   await ctx.reply(
     [
-      "✅ Link removed.",
+      "✅ Link remove ho gaya.",
       `Removed URL: ${removed.url}`,
       `Total links: ${counts.active}`,
       `Total pages: ${stats.totalPages}`,
-      `Links on last page: ${stats.linksOnLastPage}/${stats.linksPerPage}`,
     ].join("\n"),
     { link_preview_options: { is_disabled: true } },
   );
 }
 
-async function handleRemovePage(ctx: BotContext, ownerId: number): Promise<void> {
+async function handleRemovePage(ctx: BotContext, actorId: number): Promise<void> {
   const args = parsePositiveArgs(getCommandPayload(ctx), 1);
   if (!args) {
-    await ctx.reply("Usage: /removepage <page>");
+    await ctx.reply("⚠️ Galat format.\nExample: /removepage 2");
     return;
   }
 
   const [page] = args;
-  const removed = await removePage(ctx.db, page, ctx.appConfig.linksPerPage, ownerId);
+  const removed = await removePage(ctx.db, page, ctx.appConfig.linksPerPage, actorId);
   if (removed.removedCount === 0) {
-    await ctx.reply("No active links found on that page.");
+    await ctx.reply("⚠️ Is page par active links nahi mile.");
     return;
   }
 
   clearPageCache();
-  await ctx.reply(`✅ Page ${page} removed. Removed ${removed.removedCount} links.`, {
+  await ctx.reply(`✅ Page ${page} remove ho gaya. Removed links: ${removed.removedCount}`, {
     link_preview_options: { is_disabled: true },
   });
 }
@@ -217,13 +330,13 @@ async function handleListPages(ctx: BotContext): Promise<void> {
 async function handlePreview(ctx: BotContext): Promise<void> {
   const args = parsePositiveArgs(getCommandPayload(ctx), 1);
   if (!args) {
-    await ctx.reply("Usage: /preview <page>");
+    await ctx.reply("⚠️ Galat format.\nExample: /preview 1");
     return;
   }
 
   const preview = await getOwnerPreview(ctx.db, args[0], ctx.appConfig.linksPerPage);
   if (!preview) {
-    await ctx.reply("No active links found on that page.");
+    await ctx.reply("⚠️ Is page par active links nahi mile.");
     return;
   }
 
@@ -253,40 +366,53 @@ async function handleStats(ctx: BotContext): Promise<void> {
 
 async function handleReloadCache(ctx: BotContext): Promise<void> {
   clearPageCache();
-  await ctx.reply("✅ Cache cleared.");
+  await ctx.reply("✅ Cache clear ho gaya.");
 }
 
 async function handleBroadcast(ctx: BotContext): Promise<void> {
-  const payload = getCommandPayload(ctx);
-  const replyText = getReplyText(ctx);
-  const message = (payload || replyText).trim();
-
-  if (!message) {
-    await ctx.reply("Usage: /broadcast <message> or reply to a text/caption message with /broadcast");
+  const content = getBroadcastContent(ctx);
+  if (!content) {
+    await ctx.reply(
+      [
+        "⚠️ Broadcast ka message nahi mila.",
+        "",
+        "Use:",
+        " /broadcast Your message",
+        "",
+        "Ya kisi text/photo/video/sticker/document par reply karke:",
+        " /broadcast",
+      ].join("\n"),
+    );
     return;
   }
 
   if (getBroadcastProgress()?.running) {
-    await ctx.reply("A broadcast is already running. Use /broadcaststatus to check progress.");
+    await ctx.reply("⚠️ Ek broadcast already chal raha hai. /broadcaststatus se status check karo.");
     return;
   }
 
   const targetCount = await getBroadcastTargetCount(ctx.db);
-  await ctx.reply(`📣 Broadcast started to ${targetCount} users.`);
+  if (targetCount === 0) {
+    await ctx.reply("⚠️ Abhi broadcast ke liye koi tracked user nahi hai.");
+    return;
+  }
 
-  const result = await runTextBroadcast({
+  await ctx.reply(["📣 Broadcast start ho gaya.", `Target users: ${targetCount}`, "Thoda time lag sakta hai."].join("\n"));
+
+  const result = await runBroadcast({
     database: ctx.db,
     api: ctx.api,
-    text: message,
+    content,
   });
 
   await ctx.reply(
     [
-      "📣 Broadcast finished.",
+      "✅ Broadcast complete ho gaya.",
+      "",
+      `Total target: ${result.totalTargeted}`,
       `Sent: ${result.sent}`,
       `Failed: ${result.failed}`,
       `Blocked: ${result.blocked}`,
-      `Total targeted: ${result.totalTargeted}`,
     ].join("\n"),
   );
 }
@@ -294,19 +420,39 @@ async function handleBroadcast(ctx: BotContext): Promise<void> {
 async function handleBroadcastStatus(ctx: BotContext): Promise<void> {
   const progress = getBroadcastProgress();
   if (!progress) {
-    await ctx.reply("No broadcast has been started since this process booted.");
+    await ctx.reply("Abhi tak is process me koi broadcast start nahi hua.");
     return;
   }
 
   await ctx.reply(
     [
-      `Broadcast status: ${progress.running ? "running" : "finished"}`,
+      `📣 Broadcast status: ${progress.running ? "chal raha hai" : "complete"}`,
+      `Mode: ${progress.mode}`,
+      `Total target: ${progress.totalTargeted}`,
       `Sent: ${progress.sent}`,
       `Failed: ${progress.failed}`,
       `Blocked: ${progress.blocked}`,
-      `Total targeted: ${progress.totalTargeted}`,
     ].join("\n"),
   );
+}
+
+function getBroadcastContent(ctx: BotContext): BroadcastContent | undefined {
+  const payload = getCommandPayload(ctx);
+  if (payload) {
+    return { kind: "text", text: payload };
+  }
+
+  const reply = ctx.message?.reply_to_message;
+  const chatId = ctx.chat?.id;
+  if (!reply || chatId === undefined) {
+    return undefined;
+  }
+
+  return {
+    kind: "copy",
+    fromChatId: chatId,
+    messageId: reply.message_id,
+  };
 }
 
 function getCommandPayload(ctx: BotContext): string {
@@ -321,6 +467,10 @@ function getReplyText(ctx: BotContext): string {
 
 function getBotMode(ctx: BotContext): "polling" | "webhook" {
   return ctx.appConfig.isProduction || ctx.appConfig.publicUrl ? "webhook" : "polling";
+}
+
+function formatDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 function parsePositiveArgs(payload: string, expectedCount: 1): [number] | undefined;
@@ -340,3 +490,8 @@ function parsePositiveArgs(payload: string, expectedCount: 1 | 2): [number] | [n
 
   return expectedCount === 1 ? [values[0] as number] : [values[0] as number, values[1] as number];
 }
+
+export const permissionMessagesForTests = {
+  notAllowed: NOT_ALLOWED_MESSAGE,
+  usernameNotFound: SUDO_USERNAME_NOT_FOUND_MESSAGE,
+};

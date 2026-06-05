@@ -10,11 +10,16 @@ import {
 const BROADCAST_DELAY_MS = 45;
 const MAX_RETRY_ATTEMPTS = 3;
 
+export type BroadcastContent =
+  | { kind: "text"; text: string }
+  | { kind: "copy"; fromChatId: number | string; messageId: number };
+
 export interface BroadcastProgress {
   id: string;
   running: boolean;
   startedAt: Date;
   finishedAt?: Date;
+  mode: "text" | "copy";
   totalTargeted: number;
   sent: number;
   failed: number;
@@ -34,10 +39,10 @@ export function getBroadcastProgress(): BroadcastProgress | undefined {
   return currentProgress ? { ...currentProgress } : undefined;
 }
 
-export async function runTextBroadcast(input: {
+export async function runBroadcast(input: {
   database: DatabaseHandle;
   api: Api;
-  text: string;
+  content: BroadcastContent;
 }): Promise<BroadcastResult> {
   if (currentProgress?.running) {
     throw new Error("A broadcast is already running.");
@@ -48,6 +53,7 @@ export async function runTextBroadcast(input: {
     id: `${Date.now()}`,
     running: true,
     startedAt: new Date(),
+    mode: input.content.kind,
     totalTargeted,
     sent: 0,
     failed: 0,
@@ -57,7 +63,7 @@ export async function runTextBroadcast(input: {
   const cursor = getBroadcastTargetCursor(input.database);
   try {
     for await (const target of cursor) {
-      await sendBroadcastToUser(input.database, input.api, target._id, input.text);
+      await sendBroadcastToUser(input.database, input.api, target._id, input.content);
       await delay(BROADCAST_DELAY_MS);
     }
   } finally {
@@ -76,17 +82,34 @@ export async function runTextBroadcast(input: {
   };
 }
 
+export async function runTextBroadcast(input: {
+  database: DatabaseHandle;
+  api: Api;
+  text: string;
+}): Promise<BroadcastResult> {
+  return runBroadcast({
+    database: input.database,
+    api: input.api,
+    content: { kind: "text", text: input.text },
+  });
+}
+
 async function sendBroadcastToUser(
   database: DatabaseHandle,
   api: Api,
   userId: number,
-  text: string,
+  content: BroadcastContent,
 ): Promise<void> {
   for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
     try {
-      await api.sendMessage(userId, text, {
-        link_preview_options: { is_disabled: true },
-      });
+      if (content.kind === "text") {
+        await api.sendMessage(userId, content.text, {
+          link_preview_options: { is_disabled: true },
+        });
+      } else {
+        await api.copyMessage(userId, content.fromChatId, content.messageId);
+      }
+
       await markUserBroadcasted(database, userId);
       if (currentProgress) {
         currentProgress.sent += 1;

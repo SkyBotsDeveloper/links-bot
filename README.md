@@ -1,6 +1,6 @@
 # Links Bot
 
-A production-ready Telegram links bot built with Node.js, TypeScript, grammY, MongoDB Atlas, and Express. Users run `/start` to receive unlocked pages of links. Owners manage links through Telegram commands.
+A production-ready Telegram links bot built with Node.js, TypeScript, grammY, MongoDB Atlas, and Express. Users run `/start` to get paginated links. Owner and Sudo admins manage links, users, cache, stats, and broadcasts from Telegram.
 
 ## Features
 
@@ -9,7 +9,8 @@ A production-ready Telegram links bot built with Node.js, TypeScript, grammY, Mo
 - In-memory rendered page cache with invalidation on add/remove.
 - Public pagination where each page unlocks as soon as it has at least one active link.
 - User tracking for people who interact with the bot.
-- Owner-only link add, bulk add, remove, preview, stats, cache, and broadcast controls.
+- Owner + Sudo admin system.
+- Broadcast text or replied Telegram messages like photo, video, sticker, document, animation, audio, and voice.
 - Safe Telegram API behavior with auto-retry, throttling, compact messages, pagination edits, and slow broadcasts.
 - Heroku-ready `Procfile`, `app.json`, and one-click deploy button.
 
@@ -90,23 +91,74 @@ npm start
 
 `npm run seed` inserts the included 50 starter links only when the `links` collection is empty.
 
-## Owner Commands
+## Permissions
 
-- `/help` - show the owner guide.
-- `/addlink <url>` - add one `http://` or `https://` link.
-- `/addlinks <many urls>` - add many links from the command message.
+- Owner IDs come from `OWNER_IDS` env.
+- Owners have full power and cannot be removed from MongoDB.
+- Sudo admins are stored in MongoDB `sudo_users`.
+- Sudo admins can manage links, preview pages, view stats, reload cache, and broadcast.
+- Sudo admins cannot add/remove/list sudo admins.
+- Normal users can use `/start` and public pagination only.
+
+## Sudo/Admin System
+
+Owner-only commands:
+
+- `/addsudo <user_id ya @username>` - sudo admin add karo.
+- `/rmsudo <user_id ya @username>` - sudo admin remove karo.
+- `/listsudo` - active sudo admins dekho.
+
+Examples:
+
+```text
+/addsudo 123456789
+/addsudo @someusername
+/rmsudo 123456789
+/listsudo
+```
+
+Telegram limitation: bot kisi bhi random `@username` ko user ID me convert nahi kar sakta. `@username` se sudo add tabhi hoga jab user pehle bot me `/start` ya interact kar chuka ho. Numeric user ID best option hai.
+
+## Admin Commands
+
+- `/help` - Hinglish admin guide.
+- `/addlink <url>` - ek link add karo.
+- `/addlinks <many urls>` - multiple links add karo.
 - Reply with `/addlinks` to a message containing many URLs.
-- `/removelink <page> <number>` - soft-delete one active link by page position.
-- `/removepage <page>` - soft-delete up to 50 active links from that page.
-- `/listpages` - show active, removed, total page, and last-page counts.
-- `/preview <page>` - preview any active page.
-- `/stats` - show MongoDB, page, user, cache, uptime, memory, and bot mode status.
-- `/reloadcache` - clear rendered page cache.
-- `/broadcast <message>` - send a text message to all tracked, unblocked, non-bot users.
-- Reply with `/broadcast` to broadcast the replied message text or caption.
-- `/broadcaststatus` - show current or last broadcast progress for this process.
+- `/removelink <page> <number>` - page position se ek active link soft-delete karo.
+- `/removepage <page>` - us page ke active links soft-delete karo.
+- `/listpages` - active, removed, total page, aur last-page counts dekho.
+- `/preview <page>` - kisi bhi active page ka preview dekho.
+- `/stats` - MongoDB, page, user, cache, uptime, memory, aur bot mode status.
+- `/reloadcache` - rendered page cache clear karo.
+- `/broadcaststatus` - current ya last broadcast progress dekho.
 
-Normal users who try owner commands receive `❌ Not allowed.`
+Normal users jo admin commands try karte hain unko permission error milega.
+
+## Broadcast
+
+Text broadcast:
+
+```text
+/broadcast Hello sabko
+```
+
+Reply broadcast:
+
+```text
+/broadcast
+```
+
+Kisi text/photo/video/sticker/document/animation/audio/voice message par reply karke `/broadcast` bhejo. Bot `copyMessage` use karta hai, isliye media download/reupload nahi hota aur caption/media preserve rehta hai jab Telegram support karta hai.
+
+Typo aliases bhi supported hain:
+
+```text
+/broardcast
+/broardacast
+```
+
+Broadcast tracked, unblocked, non-bot users ko jayega. Tracked users wahi hain jinhone bot start/interact kiya hai.
 
 ## Pagination Rule
 
@@ -127,22 +179,6 @@ The bot tracks users who interact with it, including `/start`, messages, and cal
 
 Tracked fields include Telegram user ID, name fields, username, language code, bot flag, first and last seen timestamps, start count, message count, blocked status, and last broadcast timestamp.
 
-## Broadcasts
-
-Owners can run:
-
-```text
-/broadcast Hello everyone
-```
-
-Or reply to a text/caption message with:
-
-```text
-/broadcast
-```
-
-The bot broadcasts only to tracked users where `isBlocked=false` and `isBot=false`. Broadcasts are sent gradually, not all at once. If Telegram reports that the bot was blocked, the chat is missing, or the user is deactivated, the user is marked blocked automatically.
-
 ## Rate-Limit Safety
 
 The bot is designed to minimize Telegram `429` errors:
@@ -150,7 +186,8 @@ The bot is designed to minimize Telegram `429` errors:
 - Callback queries are answered quickly.
 - Pagination uses `editMessageText` instead of sending new messages.
 - Bulk add sends one summary reply, not one reply per link.
-- Broadcast sends slowly and only reports start/final summaries to the owner.
+- Broadcast sends slowly and only reports start/final summaries to the admin.
+- If Telegram reports bot blocked, chat missing, or user deactivated, that user is marked blocked automatically.
 - API calls use grammY auto-retry and throttling.
 
 Practical Telegram limits: avoid more than 1 message per second to the same chat, avoid group spam, and keep broad sends under about 30 messages per second.
@@ -161,4 +198,4 @@ Data is stored in MongoDB Atlas, not on the Heroku filesystem. If hosting is mov
 
 ## Security
 
-Keep `BOT_TOKEN` and `MONGODB_URI` secret. Do not commit `.env`. Owner access is controlled only by `OWNER_IDS` from the environment.
+Keep `BOT_TOKEN` and `MONGODB_URI` secret. Do not commit `.env`. Owner access is controlled by `OWNER_IDS`; sudo access is controlled by MongoDB `sudo_users`.
