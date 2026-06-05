@@ -1,0 +1,41 @@
+{
+  "name": "links-bot",
+  "version": "1.0.0",
+  "description": "Production-ready Telegram links bot built with grammY, TypeScript, MongoDB, and Express.",
+  "main": "dist/index.js",
+  "private": false,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "seed": "tsx src/seed.ts",
+    "heroku-postbuild": "npm run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "keywords": [
+    "telegram",
+    "grammy",
+    "mongodb",
+    "heroku",
+    "typescript"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@grammyjs/auto-retry": "^2.0.2",
+    "@grammyjs/transformer-throttler": "^1.2.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "grammy": "^1.43.0",
+    "mongodb": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

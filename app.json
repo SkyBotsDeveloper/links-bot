@@ -1,0 +1,44 @@
+{
+  "name": "Telegram Links Bot",
+  "description": "A fast Telegram links bot with grammY, MongoDB Atlas, webhook mode, and owner commands.",
+  "repository": "https://github.com/SkyBotsDeveloper/links-bot",
+  "keywords": ["telegram", "grammy", "mongodb", "heroku", "typescript"],
+  "env": {
+    "BOT_TOKEN": {
+      "description": "Telegram bot token from BotFather.",
+      "required": true
+    },
+    "MONGODB_URI": {
+      "description": "MongoDB Atlas connection string. Include a database name or the app will use links_bot.",
+      "required": true
+    },
+    "OWNER_IDS": {
+      "description": "Comma-separated numeric Telegram user IDs allowed to manage links.",
+      "required": true
+    },
+    "PUBLIC_URL": {
+      "description": "Public Heroku app URL, for example https://your-app.herokuapp.com.",
+      "required": true
+    },
+    "LINKS_PER_PAGE": {
+      "description": "Links needed to unlock one public page.",
+      "value": "50",
+      "required": true
+    },
+    "NODE_ENV": {
+      "description": "Runtime mode.",
+      "value": "production",
+      "required": true
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ]
+}
