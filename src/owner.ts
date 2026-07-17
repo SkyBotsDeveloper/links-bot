@@ -43,7 +43,7 @@ import {
   resolveSudoTarget,
 } from "./sudoService";
 import { getBroadcastTargetCount, getUserCounts } from "./userService";
-import { cleanSingleUrl, extractUrlsFromText, stripCommandPrefix } from "./utils/urls";
+import { cleanSingleUrl, extractLinkLinesFromText, stripCommandPrefix } from "./utils/urls";
 import { ignoreMessageNotModified } from "./utils/telegramSafe";
 import type { BotContext } from "./bot";
 
@@ -295,19 +295,19 @@ async function handleAddLinks(ctx: BotContext, actorId: number): Promise<void> {
     return;
   }
 
-  const extracted = extractUrlsFromText(sourceText);
-  if (extracted.urls.length === 0) {
-    await ctx.reply(`⚠️ Koi valid link nahi mila.\nGalat lines ignore hue: ${extracted.invalidLines}`);
+  const lines = extractLinkLinesFromText(sourceText);
+  if (lines.length === 0) {
+    await ctx.reply("⚠️ Koi line nahi mili.\n/addlinks ke baad har item new line me bhejo.");
     return;
   }
 
-  const added = await addLinks(ctx.db, extracted.urls, actorId);
+  const added = await addLinks(ctx.db, lines, actorId);
   clearPageCache();
 
   const counts = await getLinkCounts(ctx.db);
   const stats = calculatePageStats(counts.active, ctx.appConfig.linksPerPage);
   await ctx.reply(
-    formatAddSummary(`✅ ${added} links add ho gaye.`, counts, stats, extracted.invalidLines),
+    formatAddSummary(`✅ ${added} lines add ho gayi.`, counts, stats),
     { link_preview_options: { is_disabled: true } },
   );
 }

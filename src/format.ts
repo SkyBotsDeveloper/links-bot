@@ -1,6 +1,7 @@
 import type { LinkCounts } from "./linkService";
 import type { PageStats } from "./pageService";
 import type { UserCounts } from "./userService";
+import { isValidHttpUrl } from "./utils/urls";
 
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
 export const PREPARING_MESSAGE =
@@ -40,13 +41,9 @@ export function formatAddSummary(
   label: string,
   counts: LinkCounts,
   stats: PageStats,
-  ignoredLines?: number,
 ): string {
-  const ignored =
-    ignoredLines === undefined ? [] : [`Galat lines ignore hue: ${ignoredLines}`];
   return [
     label,
-    ...ignored,
     `Total links: ${counts.active}`,
     `Total pages: ${stats.totalPages}`,
   ].join("\n");
@@ -134,7 +131,7 @@ function composeHtmlLinkPage(links: string[], ownerPreviewIncomplete: boolean | 
     "🔥 <b>VIRAL VIDEOS DROP</b>",
     "📂 ACCESS LINKS BELOW 👇",
     "",
-    ...links.map((url, index) => `${index + 1}. <a href="${escapeHtmlAttribute(url)}">Link kholo</a>`),
+    ...links.map(formatHtmlEntry),
     "",
     "✅ Stay Joined For Lifetime Free Updates",
     "👀 More Exclusive Content Coming Daily",
@@ -147,10 +144,25 @@ function composeHtmlLinkPage(links: string[], ownerPreviewIncomplete: boolean | 
   return lines.join("\n");
 }
 
+function formatHtmlEntry(value: string, index: number): string {
+  if (isValidHttpUrl(value)) {
+    return `${index + 1}. <a href="${escapeHtmlAttribute(value)}">Link kholo</a>`;
+  }
+
+  return `${index + 1}. ${escapeHtmlText(value)}`;
+}
+
 function escapeHtmlAttribute(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }

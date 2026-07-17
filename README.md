@@ -123,8 +123,8 @@ Telegram limitation: bot kisi bhi random `@username` ko user ID me convert nahi 
 
 - `/help` - Hinglish admin guide.
 - `/addlink <url>` - ek link add karo.
-- `/addlinks <many urls>` - multiple links add karo.
-- Reply with `/addlinks` to a message containing many URLs.
+- `/addlinks <many lines>` - multiple lines add karo; blank lines skip hoti hain.
+- Reply with `/addlinks` to a message containing many lines.
 - `/removelink <page> <number>` - page position se ek active link soft-delete karo.
 - `/removepage <page>` - us page ke active links soft-delete karo.
 - `/listpages` - active, removed, total page, aur last-page counts dekho.
