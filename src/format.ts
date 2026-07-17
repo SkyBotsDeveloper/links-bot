@@ -4,6 +4,7 @@ import type { UserCounts } from "./userService";
 import { isValidHttpUrl } from "./utils/urls";
 
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
+const NUMBERED_ENTRY_RE = /^\d+\s*(?:[.)\]:-]\s*|\s+)\S/u;
 export const PREPARING_MESSAGE =
   "🚧 Links collection abhi prepare ho raha hai. Please joined rahiye, first drop jaldi unlock hoga.";
 export const NOT_ALLOWED_MESSAGE = "❌ Aapko is command ki permission nahi hai.";
@@ -95,6 +96,15 @@ function composePlainLinksPage(
   ownerPreviewIncomplete: boolean | undefined,
   compact: boolean,
 ): string {
+  if (shouldRenderEntriesAsSubmitted(links)) {
+    const lines = [...links];
+    if (ownerPreviewIncomplete) {
+      lines.push("", "⚠️ Admin preview: is page me abhi 50 se kam links hain.");
+    }
+
+    return lines.join("\n");
+  }
+
   const header = compact
     ? ["🔥 VIRAL VIDEOS DROP", "📂 ACCESS LINKS BELOW 👇", ""]
     : [
@@ -127,6 +137,15 @@ function composePlainLinksPage(
 }
 
 function composeHtmlLinkPage(links: string[], ownerPreviewIncomplete: boolean | undefined): string {
+  if (shouldRenderEntriesAsSubmitted(links)) {
+    const lines = links.map(escapeHtmlText);
+    if (ownerPreviewIncomplete) {
+      lines.push("", "⚠️ Admin preview: is page me abhi 50 se kam links hain.");
+    }
+
+    return lines.join("\n");
+  }
+
   const lines = [
     "🔥 <b>VIRAL VIDEOS DROP</b>",
     "📂 ACCESS LINKS BELOW 👇",
@@ -142,6 +161,10 @@ function composeHtmlLinkPage(links: string[], ownerPreviewIncomplete: boolean | 
   }
 
   return lines.join("\n");
+}
+
+function shouldRenderEntriesAsSubmitted(links: string[]): boolean {
+  return links.some((value) => NUMBERED_ENTRY_RE.test(value) || !isValidHttpUrl(value));
 }
 
 function formatHtmlEntry(value: string, index: number): string {
