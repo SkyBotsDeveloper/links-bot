@@ -9,6 +9,7 @@ import {
 
 const BROADCAST_DELAY_MS = 45;
 const MAX_RETRY_ATTEMPTS = 3;
+const RECOVERY_CONCURRENCY = 10;
 
 export type BroadcastContent =
   | { kind: "text"; text: string }
@@ -106,9 +107,10 @@ export async function runRecoveryMessages(input: {
   api: Api;
 }): Promise<RecoveryResult> {
   const result: RecoveryResult = { sent: 0, blocked: 0, failed: 0, unknown: 0 };
-  const staleBefore = new Date(Date.now() - 15 * 60_000);
+  // Any pre-existing claim belongs to an earlier worker. Do not resend it:
+  // Telegram may have accepted the message before that worker stopped.
   const stale = await input.database.users.updateMany(
-    { recoveryMessageStatus: "sending", recoveryMessageStartedAt: { $lt: staleBefore } },
+    { recoveryMessageStatus: "sending" },
     { $set: { recoveryMessageStatus: "unknown" } },
   );
   result.unknown = stale.modifiedCount;
@@ -121,25 +123,49 @@ export async function runRecoveryMessages(input: {
     recoveryMessageStatus: { $exists: false },
   };
   const cursor = input.database.users.find(eligible, { projection: { _id: 1 } });
+  let batch: Array<{ _id: number }> = [];
   try {
     for await (const target of cursor) {
-      const startedAt = new Date();
-      const claim = await input.database.users.updateOne(
-        { _id: target._id, ...eligible },
-        { $set: { recoveryMessageStatus: "sending", recoveryMessageStartedAt: startedAt } },
-      );
-      if (claim.modifiedCount !== 1) continue;
+      batch.push(target);
+      if (batch.length >= RECOVERY_CONCURRENCY) {
+        await processRecoveryBatch(batch, input.database, input.api, eligible, result);
+        batch = [];
+      }
+    }
+    if (batch.length > 0) {
+      await processRecoveryBatch(batch, input.database, input.api, eligible, result);
+    }
+  } finally {
+    await cursor.close();
+  }
+  return result;
+}
 
-      let delivered = false;
+async function processRecoveryBatch(
+  targets: Array<{ _id: number }>,
+  database: DatabaseHandle,
+  api: Api,
+  eligible: Record<string, unknown>,
+  result: RecoveryResult,
+): Promise<void> {
+  await Promise.all(
+    targets.map(async (target) => {
+      const claim = await database.users.updateOne(
+        { _id: target._id, ...eligible },
+        { $set: { recoveryMessageStatus: "sending", recoveryMessageStartedAt: new Date() } },
+      );
+      if (claim.modifiedCount !== 1) return;
+
+      let done = false;
       for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
         try {
-          await input.api.sendMessage(target._id, "Hello! The bot is back online.");
-          await input.database.users.updateOne(
+          await api.sendMessage(target._id, "Hello! The bot is back online.");
+          await database.users.updateOne(
             { _id: target._id, recoveryMessageStatus: "sending" },
             { $set: { recoveryMessageStatus: "sent", recoveryMessageSentAt: new Date() } },
           );
           result.sent += 1;
-          delivered = true;
+          done = true;
           break;
         } catch (error) {
           if (isRetryAfter(error)) {
@@ -148,7 +174,7 @@ export async function runRecoveryMessages(input: {
           }
 
           if (isBlockedOrInactive(error)) {
-            await input.database.users.updateOne(
+            await database.users.updateOne(
               { _id: target._id, recoveryMessageStatus: "sending" },
               {
                 $set: {
@@ -160,29 +186,27 @@ export async function runRecoveryMessages(input: {
             );
             result.blocked += 1;
           } else {
-            await input.database.users.updateOne(
+            await database.users.updateOne(
               { _id: target._id, recoveryMessageStatus: "sending" },
               { $set: { recoveryMessageStatus: "failed" } },
             );
             result.failed += 1;
           }
+          done = true;
           break;
         }
       }
 
-      if (!delivered) {
-        const exhausted = await input.database.users.updateOne(
+      if (!done) {
+        const exhausted = await database.users.updateOne(
           { _id: target._id, recoveryMessageStatus: "sending" },
           { $set: { recoveryMessageStatus: "failed" } },
         );
         if (exhausted.modifiedCount === 1) result.failed += 1;
       }
       await delay(BROADCAST_DELAY_MS);
-    }
-  } finally {
-    await cursor.close();
-  }
-  return result;
+    }),
+  );
 }
 
 async function sendBroadcastToUser(
