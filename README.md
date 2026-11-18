@@ -151,6 +151,8 @@ Reply broadcast:
 
 Kisi text/photo/video/sticker/document/animation/audio/voice message par reply karke `/broadcast` bhejo. Bot `copyMessage` use karta hai, isliye media download/reupload nahi hota aur caption/media preserve rehta hai jab Telegram support karta hai.
 
+Photo, video, animation, document, aur audio ke saath caption bhejo; phir us message par `/broadcast` reply karo. Sticker aur caption-less media bhi isi reply flow se broadcast hote hain. Har recipient ko original message copy hota hai.
+
 Typo aliases bhi supported hain:
 
 ```text
@@ -159,6 +161,10 @@ Typo aliases bhi supported hain:
 ```
 
 Broadcast tracked, unblocked, non-bot users ko jayega. Tracked users wahi hain jinhone bot start/interact kiya hai.
+
+## Recovery message
+
+Production startup ek baar `Hello! The bot is back online.` un users ko bhejta hai jinhone pehle `/start` kiya ho, blocked na hon, bot account na hon, aur recovery opt-out na kiya ho. Har user ke delivery status MongoDB mein save hote hain, taaki restart par sent message dobara na jaye. Interrupted sends ko `unknown` mark kiya jata hai aur automatically retry nahi hota, kyunki Telegram send ke baad process crash hone par duplicate message ka risk hota.
 
 ## Pagination Rule
 

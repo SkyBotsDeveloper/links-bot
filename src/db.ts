@@ -34,6 +34,10 @@ export interface UserDocument {
   isBlocked: boolean;
   blockedAt?: Date;
   lastBroadcastAt?: Date;
+  recoveryMessageStatus?: "sending" | "sent" | "blocked" | "failed" | "unknown";
+  recoveryMessageStartedAt?: Date;
+  recoveryMessageSentAt?: Date;
+  recoveryOptIn?: boolean;
 }
 
 export interface SudoUserDocument {

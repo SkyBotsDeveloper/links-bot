@@ -33,6 +33,13 @@ export interface BroadcastResult {
   totalTargeted: number;
 }
 
+export interface RecoveryResult {
+  sent: number;
+  blocked: number;
+  failed: number;
+  unknown: number;
+}
+
 let currentProgress: BroadcastProgress | undefined;
 
 export function getBroadcastProgress(): BroadcastProgress | undefined {
@@ -92,6 +99,90 @@ export async function runTextBroadcast(input: {
     api: input.api,
     content: { kind: "text", text: input.text },
   });
+}
+
+export async function runRecoveryMessages(input: {
+  database: DatabaseHandle;
+  api: Api;
+}): Promise<RecoveryResult> {
+  const result: RecoveryResult = { sent: 0, blocked: 0, failed: 0, unknown: 0 };
+  const staleBefore = new Date(Date.now() - 15 * 60_000);
+  const stale = await input.database.users.updateMany(
+    { recoveryMessageStatus: "sending", recoveryMessageStartedAt: { $lt: staleBefore } },
+    { $set: { recoveryMessageStatus: "unknown" } },
+  );
+  result.unknown = stale.modifiedCount;
+
+  const eligible = {
+    startCount: { $gt: 0 },
+    isBlocked: { $ne: true },
+    isBot: { $ne: true },
+    recoveryOptIn: { $ne: false },
+    recoveryMessageStatus: { $exists: false },
+  };
+  const cursor = input.database.users.find(eligible, { projection: { _id: 1 } });
+  try {
+    for await (const target of cursor) {
+      const startedAt = new Date();
+      const claim = await input.database.users.updateOne(
+        { _id: target._id, ...eligible },
+        { $set: { recoveryMessageStatus: "sending", recoveryMessageStartedAt: startedAt } },
+      );
+      if (claim.modifiedCount !== 1) continue;
+
+      let delivered = false;
+      for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
+        try {
+          await input.api.sendMessage(target._id, "Hello! The bot is back online.");
+          await input.database.users.updateOne(
+            { _id: target._id, recoveryMessageStatus: "sending" },
+            { $set: { recoveryMessageStatus: "sent", recoveryMessageSentAt: new Date() } },
+          );
+          result.sent += 1;
+          delivered = true;
+          break;
+        } catch (error) {
+          if (isRetryAfter(error)) {
+            await delay(error.parameters.retry_after * 1_000);
+            continue;
+          }
+
+          if (isBlockedOrInactive(error)) {
+            await input.database.users.updateOne(
+              { _id: target._id, recoveryMessageStatus: "sending" },
+              {
+                $set: {
+                  recoveryMessageStatus: "blocked",
+                  isBlocked: true,
+                  blockedAt: new Date(),
+                },
+              },
+            );
+            result.blocked += 1;
+          } else {
+            await input.database.users.updateOne(
+              { _id: target._id, recoveryMessageStatus: "sending" },
+              { $set: { recoveryMessageStatus: "failed" } },
+            );
+            result.failed += 1;
+          }
+          break;
+        }
+      }
+
+      if (!delivered) {
+        const exhausted = await input.database.users.updateOne(
+          { _id: target._id, recoveryMessageStatus: "sending" },
+          { $set: { recoveryMessageStatus: "failed" } },
+        );
+        if (exhausted.modifiedCount === 1) result.failed += 1;
+      }
+      await delay(BROADCAST_DELAY_MS);
+    }
+  } finally {
+    await cursor.close();
+  }
+  return result;
 }
 
 async function sendBroadcastToUser(

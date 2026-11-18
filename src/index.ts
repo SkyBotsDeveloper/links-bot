@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import { loadAppConfig } from "./config";
 import { closeDatabase, connectDatabase, ensureIndexes } from "./db";
 import { createLinksBot } from "./bot";
+import { runRecoveryMessages } from "./broadcastService";
 import { markUserBlocked } from "./userService";
 import { isTerminalTelegramFailure } from "./webhookErrors";
 import { logger } from "./utils/logger";
@@ -114,6 +115,18 @@ async function main(): Promise<void> {
 
     await bot.api.setWebhook(`${config.publicUrl}/webhook/${config.webhookSecret}`);
     logger.info(`links-bot listening on port ${config.port} in webhook mode.`);
+    void runRecoveryMessages({ database, api: bot.api })
+      .then((result) => {
+        logger.info(
+          `Recovery delivery finished: sent=${result.sent}, blocked=${result.blocked}, failed=${result.failed}, unknown=${result.unknown}.`,
+        );
+      })
+      .catch((error) => {
+        logger.error(
+          "Recovery delivery stopped; claimed recipients remain persisted to prevent duplicates.",
+          error instanceof Error ? error.message : "Unknown error",
+        );
+      });
     return;
   }
 
