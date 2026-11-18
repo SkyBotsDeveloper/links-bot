@@ -52,6 +52,17 @@ export interface SudoUserDocument {
   removedAt?: Date;
 }
 
+export interface WebhookUpdateDocument {
+  _id: number;
+  status: "processing" | "pending" | "processed";
+  update?: unknown;
+  receivedAt: Date;
+  leaseUntil?: Date;
+  attempts: number;
+  processedAt?: Date;
+  expireAt?: Date;
+}
+
 export interface DatabaseHandle {
   client: MongoClient;
   db: Db;
@@ -59,6 +70,7 @@ export interface DatabaseHandle {
   settings: Collection<SettingsDocument>;
   users: Collection<UserDocument>;
   sudoUsers: Collection<SudoUserDocument>;
+  webhookUpdates: Collection<WebhookUpdateDocument>;
 }
 
 let handle: DatabaseHandle | undefined;
@@ -87,6 +99,7 @@ export async function connectDatabase(mongodbUri: string): Promise<DatabaseHandl
     settings: db.collection<SettingsDocument>("settings"),
     users: db.collection<UserDocument>("users"),
     sudoUsers: db.collection<SudoUserDocument>("sudo_users"),
+    webhookUpdates: db.collection<WebhookUpdateDocument>("webhook_updates"),
   };
 
   return handle;
@@ -102,6 +115,8 @@ export async function ensureIndexes(database: DatabaseHandle): Promise<void> {
     database.users.createIndex({ isBlocked: 1 }),
     database.sudoUsers.createIndex({ isActive: 1 }),
     database.sudoUsers.createIndex({ username: 1 }),
+    database.webhookUpdates.createIndex({ status: 1, leaseUntil: 1 }),
+    database.webhookUpdates.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }),
   ]);
 }
 

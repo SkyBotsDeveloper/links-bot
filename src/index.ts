@@ -1,5 +1,4 @@
 import express from "express";
-import { BotError, webhookCallback } from "grammy";
 import type { Server } from "node:http";
 import { loadAppConfig } from "./config";
 import { closeDatabase, connectDatabase, ensureIndexes } from "./db";
@@ -8,6 +7,13 @@ import { runRecoveryMessages } from "./broadcastService";
 import { startBackupScheduler } from "./backupService";
 import { markUserBlocked } from "./userService";
 import { isTerminalTelegramFailure } from "./webhookErrors";
+import {
+  claimWebhookUpdate,
+  markWebhookUpdatePending,
+  markWebhookUpdateProcessed,
+  refreshWebhookUpdateLease,
+} from "./webhookUpdateService";
+import { takeWebhookHandlerError } from "./webhookHandlerState";
 import { logger } from "./utils/logger";
 
 async function main(): Promise<void> {
@@ -85,30 +91,76 @@ async function main(): Promise<void> {
       });
     });
     app.use(express.json({ limit: "1mb" }));
-    const handleWebhook = webhookCallback(bot, "express");
     app.post(`/webhook/${config.webhookSecret}`, async (req, res) => {
+      const update = req.body as { update_id?: unknown };
+      if (
+        !update ||
+        !Number.isSafeInteger(update.update_id) ||
+        (update.update_id as number) < 0
+      ) {
+        res.sendStatus(400);
+        return;
+      }
+
+      const updateId = update.update_id as number;
       try {
-        await handleWebhook(req, res);
-      } catch (error) {
-        if (isTerminalTelegramFailure(error)) {
-          const userId = error instanceof BotError ? error.ctx.from?.id : undefined;
-          if (userId !== undefined) {
-            await markUserBlocked(database, userId);
-          }
-          logger.warn("Acknowledging a webhook update after a terminal Telegram 403.");
-          if (!res.headersSent) {
-            res.sendStatus(200);
-          }
+        const claim = await claimWebhookUpdate(database, updateId, req.body);
+        if (claim === "processed") {
+          res.sendStatus(200);
+          return;
+        }
+        if (claim === "busy") {
+          res.sendStatus(503);
           return;
         }
 
+        const leaseTimer = setInterval(() => {
+          void refreshWebhookUpdateLease(database, updateId).catch((error) => {
+            logger.error("Webhook update lease refresh failed.", safeErrorMessage(error));
+          });
+        }, 30_000);
+        try {
+          await bot.handleUpdate(req.body as Parameters<typeof bot.handleUpdate>[0]);
+        } finally {
+          clearInterval(leaseTimer);
+        }
+
+        const handlerError = takeWebhookHandlerError(req.body);
+        if (handlerError !== undefined && !isTerminalTelegramFailure(handlerError)) {
+          await markWebhookUpdatePending(database, updateId);
+          logger.error(
+            "Webhook update failed; Telegram will retry it.",
+            getErrorMessage(handlerError),
+          );
+          res.sendStatus(503);
+          return;
+        }
+        if (handlerError !== undefined) {
+          const userId = getErrorFromUserId(handlerError);
+          if (userId !== undefined) await markUserBlocked(database, userId);
+        }
+        const processed = await markWebhookUpdateProcessed(database, updateId);
+        if (processed.modifiedCount !== 1) {
+          throw new Error("Webhook update completion was not durably recorded.");
+        }
+        res.sendStatus(200);
+      } catch (error) {
+        const handlerError = takeWebhookHandlerError(req.body) ?? error;
+        if (isTerminalTelegramFailure(handlerError)) {
+          const userId = getErrorFromUserId(handlerError);
+          if (userId !== undefined) await markUserBlocked(database, userId);
+          await markWebhookUpdateProcessed(database, updateId);
+          logger.warn("Acknowledging a webhook update after a terminal Telegram 403.");
+          if (!res.headersSent) res.sendStatus(200);
+          return;
+        }
+
+        await markWebhookUpdatePending(database, updateId).catch(() => undefined);
         logger.error(
           "Webhook update failed; Telegram will retry it.",
-          error instanceof Error ? error.message : "Unknown error",
+          getErrorMessage(handlerError),
         );
-        if (!res.headersSent) {
-          res.sendStatus(503);
-        }
+        if (!res.headersSent) res.sendStatus(503);
       }
     });
 
@@ -150,3 +202,22 @@ main().catch((error) => {
   logger.error("Startup failed.", error);
   void closeDatabase().finally(() => process.exit(1));
 });
+
+function getErrorFromUserId(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("ctx" in error)) return undefined;
+  const context = (error as { ctx?: { from?: { id?: number } } }).ctx;
+  return context?.from?.id;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "error" in error) {
+    const nested = (error as { error: unknown }).error;
+    return nested instanceof Error ? nested.message : "Telegram update processing error";
+  }
+  return "Unknown error";
+}
+
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}

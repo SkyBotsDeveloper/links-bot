@@ -15,6 +15,7 @@ import {
   ignoreMessageNotModified,
 } from "./utils/telegramSafe";
 import { logger } from "./utils/logger";
+import { rememberWebhookHandlerError } from "./webhookHandlerState";
 
 export interface BotContext extends Context {
   appConfig: AppConfig;
@@ -77,6 +78,7 @@ export function createLinksBot(appConfig: AppConfig, db: DatabaseHandle): Bot<Bo
   registerOwnerCommands(bot);
 
   bot.catch((error) => {
+    rememberWebhookHandlerError(error.ctx.update, error);
     const caught = error.error;
     if (caught instanceof GrammyError) {
       logger.error(

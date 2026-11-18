@@ -202,6 +202,8 @@ Practical Telegram limits: avoid more than 1 message per second to the same chat
 
 Data is stored in MongoDB Atlas, not on the Heroku filesystem. If hosting is moved to another Heroku account, use the same `MONGODB_URI` and the existing bot data remains available.
 
+Webhook updates are first persisted in `webhook_updates` and acknowledged only after processing succeeds. Telegram retries reuse the same update ID and are deduplicated; failed updates retain their payload for retry, while completed payloads are cleared and their IDs expire after 30 days.
+
 Set `BACKUP_MONGODB_URI` to a separate MongoDB cluster and `BACKUP_ENCRYPTION_KEY` to a base64-encoded 32-byte key to enable an encrypted backup immediately at startup and every 24 hours. Generate a key with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"` and keep it outside source control. Backups store versioned, compressed AES-256-GCM encrypted collection chunks, then read them back and verify checksums and document counts. Failed or interrupted snapshots are marked incomplete and retried with backoff.
 
 To safely merge a completed backup into `MONGODB_URI` without overwriting existing documents, run `npm run restore-backup -- <backup-id>` with `BACKUP_MONGODB_URI`, `BACKUP_ENCRYPTION_KEY`, and `MONGODB_URI` set. Restore verifies the full backup before writing and inserts only missing records.
