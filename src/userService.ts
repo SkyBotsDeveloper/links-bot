@@ -59,18 +59,32 @@ export async function getUserCounts(database: DatabaseHandle): Promise<UserCount
   return { totalTracked, activeBroadcastUsers, blockedUsers };
 }
 
-export async function getBroadcastTargetCount(database: DatabaseHandle): Promise<number> {
-  return database.users.countDocuments({ isBlocked: false, isBot: false });
+export async function getBroadcastTargetCount(
+  database: DatabaseHandle,
+  excludeBroadcastsSince?: Date,
+): Promise<number> {
+  const filter: Record<string, unknown> = { isBlocked: false, isBot: false };
+  if (excludeBroadcastsSince) {
+    filter.$or = [
+      { lastBroadcastAt: { $exists: false } },
+      { lastBroadcastAt: { $lt: excludeBroadcastsSince } },
+    ];
+  }
+  return database.users.countDocuments(filter);
 }
 
-export function getBroadcastTargetCursor(database: DatabaseHandle) {
-  return database.users.find(
-    { isBlocked: false, isBot: false },
-    {
-      projection: { _id: 1 },
-      sort: { lastSeenAt: -1 },
-    },
-  );
+export function getBroadcastTargetCursor(database: DatabaseHandle, excludeBroadcastsSince?: Date) {
+  const filter: Record<string, unknown> = { isBlocked: false, isBot: false };
+  if (excludeBroadcastsSince) {
+    filter.$or = [
+      { lastBroadcastAt: { $exists: false } },
+      { lastBroadcastAt: { $lt: excludeBroadcastsSince } },
+    ];
+  }
+  return database.users.find(filter, {
+    projection: { _id: 1 },
+    sort: { lastSeenAt: -1 },
+  });
 }
 
 export async function markUserBroadcasted(

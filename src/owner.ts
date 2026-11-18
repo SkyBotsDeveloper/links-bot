@@ -45,6 +45,7 @@ import {
 import { getBroadcastTargetCount, getUserCounts } from "./userService";
 import { cleanSingleUrl, extractLinkLinesFromText, stripCommandPrefix } from "./utils/urls";
 import { ignoreMessageNotModified } from "./utils/telegramSafe";
+import { logger } from "./utils/logger";
 import type { BotContext } from "./bot";
 
 type AdminHandler = (ctx: BotContext, actorId: number) => Promise<void>;
@@ -452,24 +453,47 @@ async function handleBroadcast(ctx: BotContext): Promise<void> {
 
   await ctx.reply(["📣 Broadcast start ho gaya.", `Target users: ${targetCount}`, "Thoda time lag sakta hai."].join("\n"));
 
-  const result = await runBroadcast({
+  const webhookUpdate = await ctx.db.webhookUpdates.findOne({ _id: ctx.update.update_id });
+  const broadcast = runBroadcast({
     database: ctx.db,
     api: ctx.api,
     content,
+    resumeStartedAt: webhookUpdate?.receivedAt,
   });
 
-  await ctx.reply(
-    [
-      "✅ Broadcast complete ho gaya.",
-      "",
-      `Total target: ${result.totalTargeted}`,
-      `Sent: ${result.sent}`,
-      `Fail hua: ${result.failed}`,
-      `Blocked: ${result.blocked}`,
-    ].join("\n"),
+  void broadcast.then(
+    async (result) => {
+      try {
+        await ctx.reply(
+          [
+            "✅ Broadcast complete ho gaya.",
+            "",
+            `Total target: ${result.totalTargeted}`,
+            `Sent: ${result.sent}`,
+            `Fail hua: ${result.failed}`,
+            `Blocked: ${result.blocked}`,
+          ].join("\n"),
+        );
+      } catch (error) {
+        logger.error(
+          "Broadcast completed, but its summary could not be sent.",
+          error instanceof Error ? error.message : "Unknown error",
+        );
+      }
+    },
+    async (error: unknown) => {
+      logger.error("Broadcast failed.", error instanceof Error ? error.message : "Unknown error");
+      try {
+        await ctx.reply("⚠️ Broadcast ruk gaya. /broadcaststatus se status check karo.");
+      } catch (replyError) {
+        logger.error(
+          "Could not report the broadcast failure.",
+          replyError instanceof Error ? replyError.message : "Unknown error",
+        );
+      }
+    },
   );
 }
-
 async function handleBroadcastStatus(ctx: BotContext): Promise<void> {
   const progress = getBroadcastProgress();
   if (!progress) {

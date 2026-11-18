@@ -51,41 +51,57 @@ export async function runBroadcast(input: {
   database: DatabaseHandle;
   api: Api;
   content: BroadcastContent;
+  resumeStartedAt?: Date;
 }): Promise<BroadcastResult> {
   if (currentProgress?.running) {
     throw new Error("Ek broadcast already chal raha hai.");
   }
 
-  const totalTargeted = await getBroadcastTargetCount(input.database);
-  currentProgress = {
+  const progress: BroadcastProgress = {
     id: `${Date.now()}`,
     running: true,
-    startedAt: new Date(),
+    startedAt: input.resumeStartedAt ?? new Date(),
     mode: input.content.kind,
-    totalTargeted,
+    totalTargeted: 0,
     sent: 0,
     failed: 0,
     blocked: 0,
   };
+  currentProgress = progress;
 
-  const cursor = getBroadcastTargetCursor(input.database);
+  let totalTargeted = 0;
   try {
-    for await (const target of cursor) {
-      await sendBroadcastToUser(input.database, input.api, target._id, input.content);
-      await delay(BROADCAST_DELAY_MS);
+    if (input.resumeStartedAt) {
+      const [remaining, sent, blocked] = await Promise.all([
+        getBroadcastTargetCount(input.database, input.resumeStartedAt),
+        input.database.users.countDocuments({ lastBroadcastAt: { $gte: input.resumeStartedAt } }),
+        input.database.users.countDocuments({ blockedAt: { $gte: input.resumeStartedAt } }),
+      ]);
+      progress.sent = sent;
+      progress.blocked = blocked;
+      totalTargeted = remaining + sent + blocked;
+    } else {
+      totalTargeted = await getBroadcastTargetCount(input.database);
+    }
+    progress.totalTargeted = totalTargeted;
+    const cursor = getBroadcastTargetCursor(input.database, input.resumeStartedAt);
+    try {
+      for await (const target of cursor) {
+        await sendBroadcastToUser(input.database, input.api, target._id, input.content);
+        await delay(BROADCAST_DELAY_MS);
+      }
+    } finally {
+      await cursor.close();
     }
   } finally {
-    await cursor.close();
-    if (currentProgress) {
-      currentProgress.running = false;
-      currentProgress.finishedAt = new Date();
-    }
+    progress.running = false;
+    progress.finishedAt = new Date();
   }
 
   return {
-    sent: currentProgress?.sent ?? 0,
-    failed: currentProgress?.failed ?? 0,
-    blocked: currentProgress?.blocked ?? 0,
+    sent: progress.sent,
+    failed: progress.failed,
+    blocked: progress.blocked,
     totalTargeted,
   };
 }
