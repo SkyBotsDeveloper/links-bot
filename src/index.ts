@@ -1,9 +1,11 @@
 import express from "express";
-import { webhookCallback } from "grammy";
+import { BotError, webhookCallback } from "grammy";
 import type { Server } from "node:http";
 import { loadAppConfig } from "./config";
 import { closeDatabase, connectDatabase, ensureIndexes } from "./db";
 import { createLinksBot } from "./bot";
+import { markUserBlocked } from "./userService";
+import { isTerminalTelegramFailure } from "./webhookErrors";
 import { logger } from "./utils/logger";
 
 async function main(): Promise<void> {
@@ -79,7 +81,32 @@ async function main(): Promise<void> {
       });
     });
     app.use(express.json({ limit: "1mb" }));
-    app.post(`/webhook/${config.webhookSecret}`, webhookCallback(bot, "express"));
+    const handleWebhook = webhookCallback(bot, "express");
+    app.post(`/webhook/${config.webhookSecret}`, async (req, res) => {
+      try {
+        await handleWebhook(req, res);
+      } catch (error) {
+        if (isTerminalTelegramFailure(error)) {
+          const userId = error instanceof BotError ? error.ctx.from?.id : undefined;
+          if (userId !== undefined) {
+            await markUserBlocked(database, userId);
+          }
+          logger.warn("Acknowledging a webhook update after a terminal Telegram 403.");
+          if (!res.headersSent) {
+            res.sendStatus(200);
+          }
+          return;
+        }
+
+        logger.error(
+          "Webhook update failed; Telegram will retry it.",
+          error instanceof Error ? error.message : "Unknown error",
+        );
+        if (!res.headersSent) {
+          res.sendStatus(503);
+        }
+      }
+    });
 
     server = await new Promise<Server>((resolve) => {
       const started = app.listen(config.port, () => resolve(started));
