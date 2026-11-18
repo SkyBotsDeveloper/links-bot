@@ -19,6 +19,13 @@ test("encrypted backup chunks round-trip and reject integrity changes", async ()
   const restored = await decryptBackupChunk(chunk, key);
   assert.equal((restored[0] as { _id: number })._id, 42);
   assert.ok((restored[0] as { createdAt: Date }).createdAt instanceof Date);
+  const mongoBinaryChunk = {
+    ...chunk,
+    iv: new BSON.Binary(chunk.iv),
+    authTag: new BSON.Binary(chunk.authTag),
+    payload: new BSON.Binary(chunk.payload),
+  };
+  assert.equal((await decryptBackupChunk(mongoBinaryChunk as never, key)).length, 1);
   await assert.rejects(() => decryptBackupChunk({ ...chunk, checksum: "0".repeat(64) }, key));
 });
 

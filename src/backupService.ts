@@ -56,16 +56,26 @@ export async function decryptBackupChunk(
   chunk: Pick<BackupChunk, "backupId" | "collection" | "index" | "iv" | "authTag" | "checksum" | "payload">,
   key: Buffer,
 ): Promise<unknown[]> {
-  const decipher = createDecipheriv("aes-256-gcm", key, chunk.iv);
+  const decipher = createDecipheriv("aes-256-gcm", key, asBuffer(chunk.iv));
   decipher.setAAD(Buffer.from(`${chunk.backupId}:${chunk.collection}:${chunk.index}`));
-  decipher.setAuthTag(chunk.authTag);
-  const compressed = Buffer.concat([decipher.update(chunk.payload), decipher.final()]);
+  decipher.setAuthTag(asBuffer(chunk.authTag));
+  const compressed = Buffer.concat([
+    decipher.update(asBuffer(chunk.payload)),
+    decipher.final(),
+  ]);
   const serialized = (await gunzipAsync(compressed)).toString("utf8");
   const checksum = createHash("sha256").update(serialized).digest("hex");
   if (checksum !== chunk.checksum) throw new Error("Backup integrity check failed.");
   const documents = BSON.EJSON.parse(serialized);
   if (!Array.isArray(documents)) throw new Error("Backup chunk has an invalid document list.");
   return documents as unknown[];
+}
+
+function asBuffer(value: Buffer | Uint8Array | { buffer: Uint8Array; position?: number }): Buffer {
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  const end = typeof value.position === "number" ? value.position : value.buffer.byteLength;
+  return Buffer.from(value.buffer.subarray(0, end));
 }
 
 export async function createEncryptedBackup(
