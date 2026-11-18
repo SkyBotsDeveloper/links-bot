@@ -12,6 +12,14 @@
       "description": "MongoDB Atlas connection string. Include a database name or the app will use links_bot.",
       "required": true
     },
+    "BACKUP_MONGODB_URI": {
+      "description": "Optional MongoDB URI on a separate cluster for encrypted backups.",
+      "required": false
+    },
+    "BACKUP_ENCRYPTION_KEY": {
+      "description": "Base64-encoded 32-byte key used to encrypt backup snapshots.",
+      "required": false
+    },
     "OWNER_IDS": {
       "description": "Comma-separated numeric Telegram user IDs allowed to manage links.",
       "required": true

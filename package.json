@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "test": "tsx --test tests/*.test.ts",
     "seed": "tsx src/seed.ts",
+    "restore-backup": "node dist/restoreBackup.js",
     "heroku-postbuild": "npm run build",
     "typecheck": "tsc --noEmit"
   },

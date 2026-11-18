@@ -5,6 +5,7 @@ import { loadAppConfig } from "./config";
 import { closeDatabase, connectDatabase, ensureIndexes } from "./db";
 import { createLinksBot } from "./bot";
 import { runRecoveryMessages } from "./broadcastService";
+import { startBackupScheduler } from "./backupService";
 import { markUserBlocked } from "./userService";
 import { isTerminalTelegramFailure } from "./webhookErrors";
 import { logger } from "./utils/logger";
@@ -14,6 +15,7 @@ async function main(): Promise<void> {
   const database = await connectDatabase(config.mongodbUri);
   await ensureIndexes(database);
   logger.info("MongoDB connected and indexes ensured.");
+  const stopBackupScheduler = startBackupScheduler(database, config.mongodbUri);
 
   const bot = createLinksBot(config, database);
   const botInfo = await bot.api.getMe();
@@ -30,6 +32,7 @@ async function main(): Promise<void> {
     }
     shuttingDown = true;
     logger.info(`Shutting down after ${signal}.`);
+    await stopBackupScheduler();
 
     if (pollingStarted) {
       await bot.stop();
